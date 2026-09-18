@@ -72,4 +72,4 @@ raw/
 
 # Cache Python
 __pycache__/
-*.pyc
+*.pycuv.lock
