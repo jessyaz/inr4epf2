@@ -1,6 +1,7 @@
 registry: inr
 model_uid: null
 run_dir: null
+exp_suffix: null
 
 seed: 0
 device: auto
