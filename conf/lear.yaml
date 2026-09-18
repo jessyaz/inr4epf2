@@ -40,6 +40,7 @@ model:
   recalib_every: 7
   use_val: true
   use_dummies: true
+  use_lookback: true
   calibration_windows: [84, 1092, 0]   # 0 = tout l'historique # we delete 56 cuz github issue
 
 pod:
