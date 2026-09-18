@@ -30,7 +30,8 @@ Usage :
     uv run partial_observability_degradation.py --config-name=mlp  dataset.name=DE \\
         pod.model_uid=a3f1b2c9        # restreint a un seul run principal
 """
-
+#uv run partial_observability_degradation.py --config-name=lear  dataset.name=DE pod.model_uid=92bc3dbe
+# 92bc3dbe
 import itertools
 import json
 from pathlib import Path

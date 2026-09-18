@@ -2,6 +2,8 @@ registry: lear
 model_uid: null
 run_dir: null
 
+
+
 seed: 0
 device: cpu
 
@@ -41,7 +43,8 @@ model:
   calibration_windows: [84, 1092, 0]   # 0 = tout l'historique # we delete 56 cuz github issue
 
 pod:
-  rates: [0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 0.95, 1.0]
+  model_uid: null
+  rates: [ 0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 0.95, 1.0]
   mechanisms: [mcar, block]
   train_seeds: [0]              # [0,1,2,3,4] pour les réseaux, [0] pour LEAR
   mask_seeds: [0, 1, 2, 3, 4]
