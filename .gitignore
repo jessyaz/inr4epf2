@@ -56,3 +56,20 @@ Thumbs.db
 !pyproject.toml
 !conf/*.yaml
 !datasets/datasets.yaml
+
+
+# Environnement et secrets
+.env
+
+# Configuration IDE
+.idea/
+*.iml
+
+# Donnees et logs MLflow / Experimentations
+mlruns_offline/
+results/
+raw/
+
+# Cache Python
+__pycache__/
+*.pyc
