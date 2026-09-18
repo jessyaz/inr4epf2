@@ -5,6 +5,8 @@ from abc import ABC, abstractmethod
 import torch
 import torch.nn as nn
 
+from omegaconf import OmegaConf
+
 
 class BaseForecaster(nn.Module, ABC):
 
