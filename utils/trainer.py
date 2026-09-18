@@ -50,6 +50,10 @@ def train(model, loaders, optimizer, device, logger=None):
     num_epochs = model.cfg.train.num_epochs
     patience = model.cfg.train.patience
     plot_every = getattr(model.cfg.train, "plot_every", 0)
+    warmup_steps = int(getattr(model.cfg.train, "warmup_steps", 0))
+    clip = float(getattr(model.cfg.train, "grad_clip", 0.0))
+
+    base_lrs = [g["lr"] for g in optimizer.param_groups]
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.7, patience=5, cooldown=3, min_lr=1e-6
@@ -59,6 +63,8 @@ def train(model, loaders, optimizer, device, logger=None):
     best_state_dict = None
     patience_counter = 0
     val_loss_dict = {"MSE": float("nan")}
+    step = 0
+
 
     for epoch in range(num_epochs):
         model.train()
@@ -68,13 +74,21 @@ def train(model, loaders, optimizer, device, logger=None):
         for batch_idx, batch in enumerate(
                 tqdm(train_loader, desc=f"Epoch {epoch + 1}", leave=False)):
 
+            if step < warmup_steps:
+                f = _warmup_factor(step, warmup_steps)
+                for g, base in zip(optimizer.param_groups, base_lrs):
+                    g["lr"] = base * f
+
             pred = model.forward_step(batch, device)
             target = batch["Y"].to(device)
             loss = ((pred - target) ** 2).mean()
 
             optimizer.zero_grad()
             loss.backward()
+            if clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
             optimizer.step()
+            step += 1
 
             running += loss.item()
             n += 1
@@ -93,7 +107,10 @@ def train(model, loaders, optimizer, device, logger=None):
             logger.log_metrics(val_loss_dict, epoch=epoch, prefix="val")
 
         current = val_loss_dict["MSE"]
-        scheduler.step(current)
+
+        if step >= warmup_steps:
+            scheduler.step(current)
+
         print(f"epoch {epoch + 1:3d}  train {loss_dict['MSE']:.5f}  val {current:.5f}")
 
         if current < best_val_loss:
@@ -111,3 +128,9 @@ def train(model, loaders, optimizer, device, logger=None):
         model.load_state_dict(best_state_dict)
 
     return {"train_loss": loss_dict, "val_loss": val_loss_dict}
+
+
+def _warmup_factor(step, warmup_steps):
+    if warmup_steps <= 0:
+        return 1.0
+    return min(1.0, (step + 1) / warmup_steps)
