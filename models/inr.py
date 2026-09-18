@@ -151,6 +151,7 @@ class DeepSetsEncoder(nn.Module):
     def forward(self, elements, mask):
         e = self.phi(elements)
         m = mask.unsqueeze(-1).to(e.dtype)
+        n_obs = m.sum(dim=1)
 
 
         mean_pool = (e * m).sum(dim=1) / m.sum(dim=1).clamp(min=1.0)
