@@ -18,11 +18,11 @@ def compute_metrics(y_hat, y_true, spike_q=0.90):
     naive = naive_seasonal(y_true)
     mae_naive = np.abs(naive - y_true).mean()
 
-    print("MAE naive :", mae_naive)
-    print("shape     :", y_true.shape)
-    naive_24 = np.concatenate([y_true[:1], y_true[:-1]], axis=0)
-    print("MAE naive J-1 :", np.abs(naive_24 - y_true).mean())
-    print("MAE naive J-7 :", mae_naive)
+    # print("MAE naive :", mae_naive)
+    # print("shape     :", y_true.shape)
+    # naive_24 = np.concatenate([y_true[:1], y_true[:-1]], axis=0)
+    # print("MAE naive J-1 :", np.abs(naive_24 - y_true).mean())
+    # print("MAE naive J-7 :", mae_naive)
 
     thr = np.quantile(y_true, spike_q)
     spike = y_true >= thr

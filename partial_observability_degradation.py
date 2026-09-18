@@ -1,299 +1,255 @@
-"""POD -- Partial Observability Degradation.
+"""Resume des balayages POD : ce qu'il faut regarder en premier.
 
-Evalue la degradation d'un modele deja estime quand une part croissante de la
-fenetre de lookback devient inobservable.
-
-Ce script N'ENTRAINE RIEN. Il recupere dans MLflow les runs principaux
-`{registry}_main_{uid}` de l'experience `icassp_{dataset}_{registry}`,
-produits par runner.py, charge leur checkpoint, et balaie la grille en
-inference seule. C'est ce qui isole l'effet mesure : la degradation vient de
-l'observabilite a l'inference, pas d'un reapprentissage sur donnees degradees.
-
-Les points de grille sont enregistres comme SOUS-RUNS du run principal
-lui-meme, qui est rouvert le temps du balayage : un seul run parent par
-modele estime, sa courbe accrochee dessous.
-
-Un modele a gradient a plusieurs runs principaux (un par graine
-d'entrainement) ; chacun donne sa propre courbe. Un modele deterministe n'en
-a qu'un, et seules les graines de masque font varier ses resultats.
-
-Deux notions d'ablation, distinctes :
-  - rate = 1.0        le modele estime AVEC lookback, prive de toute
-                      observation a l'inference. Asymptote du balayage.
-  - run `_ablated_`   le modele reestime SANS lookback (runner.py avec
-                      model.use_lookback=false). Mieux specifie pour la tache
-                      sans historique, donc borne inferieure plus juste.
-                      Recupere ici s'il existe, jamais estime.
+Lit les raw_*.csv produits par le balayage et repond a quatre questions :
+  - ou part chaque modele, et ou arrive-t-il ?
+  - a quel taux les courbes se croisent-elles ?
+  - quelle est la pente de degradation de chacun ?
+  - l'avantage est-il plus marque sur les extremes que sur l'erreur globale ?
 
 Usage :
-    uv run partial_observability_degradation.py --config-name=lear dataset.name=DE
-    uv run partial_observability_degradation.py --config-name=mlp  dataset.name=DE \\
-        pod.model_uid=a3f1b2c9        # restreint a un seul run principal
+    uv run python summarize_pod.py
+    uv run python summarize_pod.py --market DE --mechanism mcar
+    uv run python summarize_pod.py --reference lear --metric MAE
 """
 
-import itertools
-import json
-from pathlib import Path
+import argparse
+import glob
+import os
 
-import hydra
-import mlflow
+import numpy as np
 import pandas as pd
-import torch
-from tqdm import tqdm
-from omegaconf import DictConfig, OmegaConf
 
-from datasets.loader import build_loader, load_market
-from naming import ABLATED, MAIN, child_run, experiment_name, parse_uid
-from utils.mlflow_logger import download_checkpoint, find_runs
-from utils.tester import test
-
-from runner import MODEL_REGISTRY
+MODEL_ORDER = ["naive", "lear", "dnn", "epf_transformer", "inr"]
+MARKET_ORDER = ["NP", "PJM", "BE", "FR", "DE"]
 
 
-# ---------------------------------------------------------------------------
-# recuperation des modeles estimes
-# ---------------------------------------------------------------------------
-
-def locate(cfg, kind=MAIN):
-    """[(client, run, uid)] des runs `{registry}_{kind}_*` de l'experience.
-
-    Restreint a pod.model_uid s'il est renseigne. La recherche et le repli
-    serveur -> store local sont assures par find_runs (utils.mlflow_logger).
-    """
-    reg = cfg.registry
-    want = cfg.pod.get("model_uid", None)
-
-    out = []
-    for client, run, name in find_runs(experiment_name(cfg), f"{reg}_{kind}_"):
-        uid = parse_uid(name, reg)
-        if want and uid != want:
-            continue
-        out.append((client, run, uid))
-    return out
+def _order(values, ref):
+    known = [v for v in ref if v in values]
+    return known + sorted(set(values) - set(known))
 
 
-def load_model(cfg, client, run, ckpt_dir, device):
-    path = download_checkpoint(client, run, dest=str(ckpt_dir))
-    return MODEL_REGISTRY[cfg.registry].load(cfg, path).to(device)
+def load(results_dir):
+    files = glob.glob(os.path.join(results_dir, "*", "raw_*.csv"))
+    if not files:
+        raise SystemExit(f"aucun raw_*.csv sous {results_dir}")
+    df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    if "variant" in df:
+        df = df[df.variant == "full"]
+    return df
 
 
-def ensure_ready(model, cfg, d, common, seed):
-    """Prepare un modele a recalibration glissante s'il ne l'est pas deja.
-
-    Un checkpoint porte deja ses calibrations (_recal) : les refaire serait
-    du calcul perdu. On ne les reconstruit que si elles manquent, ou si la
-    calibration doit elle aussi subir la degradation.
-    """
-    if not hasattr(model, "prepare_test"):
-        return
-    if cfg.pod.recalib_on_masked:
-        return                       # refait a chaque point, dans evaluate()
-    if getattr(model, "_recal", None):
-        return                       # deja dans le checkpoint
-
-    if getattr(model, "_train_X", None) is None:
-        print("      [POD] calibrations absentes du checkpoint et historique "
-              "non serialise : evaluation sans recalibration glissante")
-        return
-
-    clean = build_loader(d["test"], stride=cfg.window.stride_eval,
-                         rate=0.0, seed=seed, **common)
-    model.prepare_test(clean, None)
+def agg(df, metric):
+    return (df.groupby(["market", "model", "mechanism", "rate"])[metric]
+            .agg(mean="mean", std="std", n="size").reset_index())
 
 
-# ---------------------------------------------------------------------------
-# evaluation
-# ---------------------------------------------------------------------------
-
-def build_common(cfg):
-    w = cfg.window
-    return dict(lookback=w.lookback, horizon=w.horizon,
-                batch_size=cfg.dataset.batch_size,
-                num_workers=cfg.dataset.num_workers)
-
-
-def evaluate(model, cfg, d, common, rate, mechanism, seed, device):
-    w, m = cfg.window, cfg.masking
-    loader = build_loader(d["test"], stride=w.stride_eval,
-                          rate=rate, mechanism=mechanism,
-                          block_mean=m.block_mean, seed=seed, **common)
-
-    if hasattr(model, "prepare_test") and cfg.pod.recalib_on_masked:
-        model.prepare_test(loader)
-
-    return test(model, loader, d["scaler"], device, logger=None,
-                verbose=False)["test_loss"]
-
-
-def log_child(name, params, metrics):
-    """Sous-run imbrique ; un echec n'interrompt jamais le balayage."""
-    try:
-        with mlflow.start_run(nested=True, run_name=name):
-            mlflow.log_params(params)
-            mlflow.log_metrics(metrics)
-    except Exception as e:
-        print(f"      [mlflow] sous-run '{name}' non enregistre : {e}")
-
-
-def grid_points(cfg):
-    """(taux, mecanisme, graine) a evaluer.
-
-    A rate = 1.0 plus rien n'est observe : le mecanisme et la graine sont
-    sans effet, un seul point suffit au lieu de |mech| x |seeds| identiques.
-    """
-    rates = sorted(set(float(r) for r in cfg.pod.rates))
-    mechs = list(cfg.pod.mechanisms)
-    seeds = list(cfg.pod.mask_seeds)
-
-    pts = [(r, m, s) for r, m, s in itertools.product(rates, mechs, seeds)
-           if 0 < r < 1.0]
-    if 1.0 in rates:
-        pts.append((1.0, mechs[0], seeds[0]))
-    return pts
-
-
-# ---------------------------------------------------------------------------
-# une courbe, accrochee sous son run principal
-# ---------------------------------------------------------------------------
-
-def sweep_one(cfg, d, device, client, run, uid, rows, ckpt_dir, bar=None):
-    reg, market = cfg.registry, cfg.dataset.name
-    mechs = list(cfg.pod.mechanisms)
-    seeds = list(cfg.pod.mask_seeds)
-    common = build_common(cfg)
-
-    model = load_model(cfg, client, run, ckpt_dir, device)
-    ensure_ready(model, cfg, d, common, seeds[0])
-
-    base = dict(market=market, model=reg, uid=uid, variant="full")
-    pts = grid_points(cfg)
-
-    # on rouvre le run principal : la courbe s'accroche dessous plutot que
-    # sous un nouveau parent
-    mlflow.set_tracking_uri(client.tracking_uri)
-    try:
-        parent = mlflow.start_run(run_id=run.info.run_id)
-    except Exception as e:
-        print(f"      [mlflow] run principal non rouvert ({e}) ; "
-              f"les resultats restent ecrits dans le CSV")
-        parent = None
-
-    try:
-        # le point de reference est re-mesure ici, par le meme chemin de code
-        # que le reste de la courbe : un checkpoint mal recharge se verrait
-        ref = evaluate(model, cfg, d, common, 0.0, mechs[0], seeds[0], device)
-        rows.append(dict(**base, rate=0.0, mechanism="none",
-                         mask_seed=seeds[0], **ref))
-
-        for rate, mech, ms in pts:
-            res = evaluate(model, cfg, d, common, rate, mech, ms, device)
-            rows.append(dict(**base, rate=rate, mechanism=mech,
-                             mask_seed=ms, **res))
-            if bar is not None:
-                bar.update(1)
-                bar.set_postfix(uid=uid, ref=f"{ref['MAE']:.3f}",
-                                r=rate, m=mech, MAE=f"{res['MAE']:.3f}")
-            if parent is not None:
-                log_child(child_run(reg, uid, rate),
-                          dict(rate=rate, mechanism=mech, mask_seed=ms,
-                               market=market, registry=reg, variant="full"),
-                          res)
-    finally:
-        if parent is not None:
-            try:
-                mlflow.end_run("FINISHED")
-            except Exception:
-                pass
-
-
-def sweep_ablated(cfg, d, device, rows, ckpt_dir):
-    """Evalue les runs `_ablated_` s'il en existe. N'en estime aucun."""
-    found = locate(cfg, kind=ABLATED)
-    if not found:
-        print(f"\n[POD] aucun run '{cfg.registry}_{ABLATED}_*' "
-              f"(le produire avec runner.py model.use_lookback=false)")
-        return
-
-    common = build_common(cfg)
-    mech0 = list(cfg.pod.mechanisms)[0]
-    seed0 = list(cfg.pod.mask_seeds)[0]
-
-    for client, run, uid in found:
-        model = load_model(cfg, client, run, ckpt_dir, device)
-        ensure_ready(model, cfg, d, common, seed0)
-        res = evaluate(model, cfg, d, common, 1.0, mech0, seed0, device)
-        rows.append(dict(market=cfg.dataset.name, model=cfg.registry, uid=uid,
-                         variant="ablated", rate=1.0, mechanism="ablated",
-                         mask_seed=seed0, **res))
-        print(f"[POD] ablate {uid}  MAE {res['MAE']:.4f}  "
-              f"rMAE {res['rMAE']:.4f}")
+def series(a, market, model, mechanism):
+    """Courbe d'un bras ; le point a rate=0 porte le mecanisme 'none' et
+    doit apparaitre sur toutes les courbes."""
+    s = a[(a.market == market) & (a.model == model)
+          & (a.mechanism.isin([mechanism, "none"]))].sort_values("rate")
+    return s.rate.values, s["mean"].values, s["std"].values
 
 
 # ---------------------------------------------------------------------------
 
-@hydra.main(version_base=None, config_path="conf")
-def main(cfg: DictConfig):
-    device = (("cuda" if torch.cuda.is_available() else "cpu")
-              if cfg.device == "auto" else cfg.device)
-    market, reg = cfg.dataset.name, cfg.registry
-    exp = experiment_name(cfg)
-
-    print(f"[POD] experiment {exp} | device={device}")
-    print(f"      taux        {list(cfg.pod.rates)}")
-    print(f"      mecanismes  {list(cfg.pod.mechanisms)}")
-    print(f"      graines     masque {list(cfg.pod.mask_seeds)}")
-
-    found = locate(cfg, kind=MAIN)
-    if not found:
-        raise SystemExit(
-            f"aucun run '{reg}_{MAIN}_*' dans '{exp}'.\n"
-            f"  -> uv run runner.py --config-name={reg} dataset.name={market}"
-        )
-    print(f"      {len(found)} run(s) principal(aux) : "
-          f"{[u for *_, u in found]}")
-
-    d = load_market(market, cfg.dataset.processed_dir)
-    out = Path(cfg.pod.out_dir) / exp
-    out.mkdir(parents=True, exist_ok=True)
-    ckpt_dir = out / "ckpt"
-    ckpt_dir.mkdir(exist_ok=True)
-
-    # une barre unique pour l'ensemble du balayage : le point de reference
-    # de chaque run s'ajoute aux points de grille
-    total = len(found) * (len(grid_points(cfg)) + 1)
+def table_levels(a, mechanism, rates):
+    """Niveau de chaque modele a quelques taux."""
     rows = []
-    with tqdm(total=total, desc=f"POD {reg}/{market}", unit="pt",
-              dynamic_ncols=True) as bar:
-        for client, run, uid in found:
-            bar.update(1)                       # point de reference
-            sweep_one(cfg, d, device, client, run, uid, rows, ckpt_dir, bar)
+    for mk in _order(a.market.unique(), MARKET_ORDER):
+        for md in _order(a.model.unique(), MODEL_ORDER):
+            r, v, s = series(a, mk, md, mechanism)
+            if len(r) == 0:
+                continue
+            row = {"market": mk, "model": md}
+            for t in rates:
+                i = np.where(r == t)[0]
+                row[f"{t:g}"] = f"{v[i[0]]:.2f}" if len(i) else "--"
+            rows.append(row)
+    return pd.DataFrame(rows)
 
-    if cfg.pod.run_ablation:
-        sweep_ablated(cfg, d, device, rows, ckpt_dir)
 
-    # -- sorties ------------------------------------------------------------
-    tag = f"{reg}_{market}"
-    df = pd.DataFrame(rows)
-    df.to_csv(out / f"raw_{tag}.csv", index=False)
+def table_slope(a, mechanism, upto=0.9):
+    """Degradation relative de rate=0 a `upto`. C'est le chiffre qui separe
+    les profils : plat pour une ingestion masquee, croissant pour une
+    imputation."""
+    rows = []
+    for mk in _order(a.market.unique(), MARKET_ORDER):
+        for md in _order(a.model.unique(), MODEL_ORDER):
+            r, v, _ = series(a, mk, md, mechanism)
+            if 0.0 not in r or upto not in r:
+                continue
+            a0 = v[list(r).index(0.0)]
+            a1 = v[list(r).index(upto)]
+            asym = v[list(r).index(1.0)] if 1.0 in r else np.nan
+            rows.append({"market": mk, "model": md,
+                         "r=0": round(a0, 2), f"r={upto:g}": round(a1, 2),
+                         "degr_%": round(100 * (a1 - a0) / a0, 1),
+                         "asympt": round(asym, 2) if asym == asym else None})
+    return pd.DataFrame(rows)
 
-    agg = (df[df.variant == "full"]
-           .groupby(["market", "model", "mechanism", "rate"])
-           .agg(MAE_mean=("MAE", "mean"), MAE_std=("MAE", "std"),
-                rMAE_mean=("rMAE", "mean"), rMAE_std=("rMAE", "std"),
-                MAE_spike_mean=("MAE_spike", "mean"),
-                MAE_spike_std=("MAE_spike", "std"),
-                rate_eff=("masking_rate_effective", "mean"),
-                n=("MAE", "size"))
-           .reset_index())
-    agg.to_csv(out / f"aggregated_{tag}.csv", index=False)
 
-    with open(out / f"meta_{tag}.json", "w") as f:
-        json.dump({"experiment": exp, "uids": [u for *_, u in found],
-                   "config": OmegaConf.to_container(cfg, resolve=True)},
-                  f, indent=2)
+def table_retention(a, mechanism, rates=(0.5, 0.7, 0.9, 0.95)):
+    """Fraction du chemin parcouru vers l'asymptote.
 
-    print(f"\n[POD] {len(rows)} evaluations -> {out}")
-    print(agg.to_string(index=False))
+        rho(p) = [MAE(p) - MAE(0)] / [MAE(1) - MAE(0)]
+
+    Vaut 0 sans masquage et 1 lorsque plus rien n'est observe. Un modele a
+    rho = 0.6 pour p = 0.9 n'exploite plus que 40 % de ce que le lookback
+    pouvait encore lui apporter ; un modele a rho = 0.1 en exploite encore
+    90 %.
+
+    L'interet de cette quantite est d'etre sans unite et interne a chaque
+    modele : elle compare l'exploitation de l'information residuelle sans
+    dependre du niveau d'erreur, donc reste lisible sur les marches ou les
+    modeles ne partent pas du meme point.
+    """
+    rows = []
+    for mk in _order(a.market.unique(), MARKET_ORDER):
+        for md in _order(a.model.unique(), MODEL_ORDER):
+            r, v, _ = series(a, mk, md, mechanism)
+            if 0.0 not in r or 1.0 not in r:
+                continue
+            a0 = v[list(r).index(0.0)]
+            a1 = v[list(r).index(1.0)]
+            span = a1 - a0
+            # asymptote trop proche du point nominal : le ratio n'a plus
+            # de sens, le lookback n'apportait deja presque rien
+            if span <= 0.1 * a0:
+                continue
+            row = {"market": mk, "model": md}
+            for p in rates:
+                i = np.where(r == p)[0]
+                row[f"rho({p:g})"] = (round(float((v[i[0]] - a0) / span), 3)
+                                      if len(i) else None)
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def table_crossing(a, mechanism, reference):
+    """Taux a partir duquel chaque modele passe sous la reference.
+
+    Interpolation lineaire entre les deux taux encadrants ; 0 si le modele
+    est devant des le depart, NaN s'il ne passe jamais devant.
+    """
+    rows = []
+    for mk in _order(a.market.unique(), MARKET_ORDER):
+        r0, v0, _ = series(a, mk, reference, mechanism)
+        if len(r0) == 0:
+            continue
+        for md in _order(a.model.unique(), MODEL_ORDER):
+            if md == reference:
+                continue
+            r, v, _ = series(a, mk, md, mechanism)
+            common = np.intersect1d(r, r0)
+            if len(common) < 2:
+                continue
+            d = np.interp(common, r, v) - np.interp(common, r0, v0)
+
+            x = 0.0 if d[0] <= 0 else np.nan
+            if d[0] > 0:
+                for i in range(1, len(common)):
+                    if d[i - 1] > 0 >= d[i]:
+                        x = common[i - 1] + (common[i] - common[i - 1]) \
+                            * d[i - 1] / (d[i - 1] - d[i])
+                        break
+            rows.append({"market": mk, "model": md,
+                         f"crossing_vs_{reference}":
+                             "--" if x != x else f"{x:.2f}"})
+    return pd.DataFrame(rows)
+
+
+def table_spike(df, mechanism, rate, metric="MAE"):
+    """Avantage relatif sur l'erreur globale vs sur le decile superieur.
+
+    L'imputation lisse : elle attenue les extremes en premier. Si l'ecart
+    est plus grand sur MAE_spike que sur MAE, c'est la signature de cet
+    effet."""
+    spike = f"{metric}_spike"
+    if spike not in df.columns:
+        return pd.DataFrame()
+    a1, a2 = agg(df, metric), agg(df, spike)
+    rows = []
+    for mk in _order(a1.market.unique(), MARKET_ORDER):
+        sel1 = a1[(a1.market == mk) & (a1.mechanism == mechanism)
+                  & (a1.rate == rate)]
+        sel2 = a2[(a2.market == mk) & (a2.mechanism == mechanism)
+                  & (a2.rate == rate)]
+        for md in _order(sel1.model.unique(), MODEL_ORDER):
+            g = sel1[sel1.model == md]
+            s = sel2[sel2.model == md]
+            if g.empty or s.empty:
+                continue
+            rows.append({"market": mk, "model": md,
+                         metric: round(float(g["mean"].iloc[0]), 2),
+                         spike: round(float(s["mean"].iloc[0]), 2)})
+    return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--results", default="./results/pod")
+    ap.add_argument("--metric", default="MAE")
+    ap.add_argument("--mechanism", default="mcar", choices=["mcar", "block"])
+    ap.add_argument("--reference", default="lear")
+    ap.add_argument("--market", default=None,
+                    help="restreindre a un marche")
+    ap.add_argument("--rates", nargs="+", type=float,
+                    default=[0.0, 0.3, 0.5, 0.7, 0.9, 0.95, 1.0])
+    ap.add_argument("--spike-rate", type=float, default=0.7)
+    args = ap.parse_args()
+
+    df = load(args.results)
+    if args.market:
+        df = df[df.market == args.market]
+
+    a = agg(df, args.metric)
+    pd.set_option("display.width", 200)
+
+    n_by = df.groupby(["market", "model"]).size()
+    print(f"{len(df)} evaluations | marches {sorted(df.market.unique())} "
+          f"| modeles {sorted(df.model.unique())}")
+    print(f"mecanisme affiche : {args.mechanism}\n")
+
+    print(f"=== {args.metric} par taux ===")
+    print(table_levels(a, args.mechanism, args.rates).to_string(index=False))
+
+    print(f"\n=== degradation 0 -> 90 % ===")
+    print(table_slope(a, args.mechanism).to_string(index=False))
+
+    print(f"\n=== information residuelle exploitee "
+          f"(rho = chemin parcouru vers l'asymptote) ===")
+    ret = table_retention(a, args.mechanism)
+    if not ret.empty:
+        print(ret.to_string(index=False))
+        print("  rho proche de 0 : le modele tire encore parti de ce qui "
+              "reste observe")
+        print("  rho proche de 1 : il a deja atteint sa performance sans "
+              "historique")
+    else:
+        print("  (necessite les points a rate = 0 et rate = 1)")
+
+    if args.reference in set(a.model):
+        print(f"\n=== taux de croisement avec {args.reference} ===")
+        cr = table_crossing(a, args.mechanism, args.reference)
+        if not cr.empty:
+            print(cr.to_string(index=False))
+
+    sp = table_spike(df, args.mechanism, args.spike_rate, args.metric)
+    if not sp.empty:
+        print(f"\n=== erreur globale vs decile superieur "
+              f"(r={args.spike_rate:g}) ===")
+        print(sp.to_string(index=False))
+
+    # dispersion : un effet plus petit que l'ecart-type n'est pas mesurable
+    print("\n=== dispersion inter-graines (ecart-type moyen) ===")
+    d = (a[a.rate > 0].groupby(["market", "model"])["std"].mean()
+         .round(3).reset_index().rename(columns={"std": "std_moyen"}))
+    d["n_par_point"] = [int(a[(a.market == r.market) & (a.model == r.model)]
+                            ["n"].max()) for r in d.itertuples()]
+    print(d.to_string(index=False))
 
 
 if __name__ == "__main__":
