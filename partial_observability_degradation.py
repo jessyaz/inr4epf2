@@ -39,6 +39,7 @@ import hydra
 import mlflow
 import pandas as pd
 import torch
+from tqdm import tqdm
 from omegaconf import DictConfig, OmegaConf
 
 from datasets.loader import build_loader, load_market
@@ -120,7 +121,8 @@ def evaluate(model, cfg, d, common, rate, mechanism, seed, device):
     if hasattr(model, "prepare_test") and cfg.pod.recalib_on_masked:
         model.prepare_test(loader)
 
-    return test(model, loader, d["scaler"], device, logger=None)["test_loss"]
+    return test(model, loader, d["scaler"], device, logger=None,
+                verbose=False)["test_loss"]
 
 
 def log_child(name, params, metrics):
@@ -154,13 +156,12 @@ def grid_points(cfg):
 # une courbe, accrochee sous son run principal
 # ---------------------------------------------------------------------------
 
-def sweep_one(cfg, d, device, client, run, uid, rows, ckpt_dir):
+def sweep_one(cfg, d, device, client, run, uid, rows, ckpt_dir, bar=None):
     reg, market = cfg.registry, cfg.dataset.name
     mechs = list(cfg.pod.mechanisms)
     seeds = list(cfg.pod.mask_seeds)
     common = build_common(cfg)
 
-    print(f"\n[POD] {reg}_{MAIN}_{uid} | {market}")
     model = load_model(cfg, client, run, ckpt_dir, device)
     ensure_ready(model, cfg, d, common, seeds[0])
 
@@ -181,17 +182,17 @@ def sweep_one(cfg, d, device, client, run, uid, rows, ckpt_dir):
         # le point de reference est re-mesure ici, par le meme chemin de code
         # que le reste de la courbe : un checkpoint mal recharge se verrait
         ref = evaluate(model, cfg, d, common, 0.0, mechs[0], seeds[0], device)
-        print(f"  reference  MAE {ref['MAE']:.4f}  rMAE {ref['rMAE']:.4f}")
         rows.append(dict(**base, rate=0.0, mechanism="none",
                          mask_seed=seeds[0], **ref))
 
-        for k, (rate, mech, ms) in enumerate(pts, 1):
+        for rate, mech, ms in pts:
             res = evaluate(model, cfg, d, common, rate, mech, ms, device)
             rows.append(dict(**base, rate=rate, mechanism=mech,
                              mask_seed=ms, **res))
-            print(f"  [{k:3d}/{len(pts)}] r={rate:<5} {mech:<6} s={ms}  "
-                  f"MAE {res['MAE']:.4f}  rMAE {res['rMAE']:.4f}  "
-                  f"spike {res['MAE_spike']:.4f}")
+            if bar is not None:
+                bar.update(1)
+                bar.set_postfix(uid=uid, ref=f"{ref['MAE']:.3f}",
+                                r=rate, m=mech, MAE=f"{res['MAE']:.3f}")
             if parent is not None:
                 log_child(child_run(reg, uid, rate),
                           dict(rate=rate, mechanism=mech, mask_seed=ms,
@@ -257,9 +258,15 @@ def main(cfg: DictConfig):
     ckpt_dir = out / "ckpt"
     ckpt_dir.mkdir(exist_ok=True)
 
+    # une barre unique pour l'ensemble du balayage : le point de reference
+    # de chaque run s'ajoute aux points de grille
+    total = len(found) * (len(grid_points(cfg)) + 1)
     rows = []
-    for client, run, uid in found:
-        sweep_one(cfg, d, device, client, run, uid, rows, ckpt_dir)
+    with tqdm(total=total, desc=f"POD {reg}/{market}", unit="pt",
+              dynamic_ncols=True) as bar:
+        for client, run, uid in found:
+            bar.update(1)                       # point de reference
+            sweep_one(cfg, d, device, client, run, uid, rows, ckpt_dir, bar)
 
     if cfg.pod.run_ablation:
         sweep_ablated(cfg, d, device, rows, ckpt_dir)

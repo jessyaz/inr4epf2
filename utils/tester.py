@@ -40,7 +40,7 @@ def compute_metrics(y_hat, y_true, spike_q=0.90):
 
 
 @torch.no_grad()
-def test(model, loader, scaler, device, logger=None):
+def test(model, loader, scaler, device, logger=None, verbose=True):
     model.eval()
 
     preds, trues, masks = [], [], []
@@ -83,7 +83,8 @@ def test(model, loader, scaler, device, logger=None):
         plt.close(fig)
         logger.log_metrics(loss_dict, epoch=0, prefix="test")
 
-    for k, v in loss_dict.items():
-        print(f"  {k:24s} {v:.4f}")
+    if verbose:
+        for k, v in loss_dict.items():
+            print(f"  {k:24s} {v:.4f}")
 
     return {"test_loss": loss_dict}
