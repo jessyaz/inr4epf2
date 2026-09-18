@@ -25,7 +25,7 @@ masking:
 train:
   num_epochs: 300
   patience: 30
-  warmup_steps: 0
+  warmup_steps: 500
   grad_clip: 0.0
   plot_every: 0
   save_checkpoint: true

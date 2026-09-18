@@ -43,9 +43,10 @@ class BaseForecaster(nn.Module, ABC):
     # -- persistance --------------------------------------------------------
 
     def save(self, path):
-        """Par defaut : state_dict PyTorch. Surcharge si le modele porte
-        des objets non-tensoriels (estimateurs sklearn, par exemple)."""
-        torch.save(self.state_dict(), path)
+        torch.save({
+            "state_dict": self.state_dict(),
+            "model_cfg": OmegaConf.to_container(self.cfg.model, resolve=True),
+        }, path)
 
     @classmethod
     def load(cls, cfg, path, map_location="cpu"):
