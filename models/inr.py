@@ -162,13 +162,26 @@ class DeepSetsEncoder(nn.Module):
         return self.norm(z) if self.norm is not None else z
 
 
-def masked_stats(P, mask, eps=1e-3):
-    """Moyenne et ecart-type sur les seules positions observees. (B, 1)"""
+def masked_stats(P, mask, eps=0.1):
+    """Moyenne et ecart-type sur les seules positions observees. (B, 1)
+
+    Sous masquage fort ces statistiques reposent sur tres peu de points et
+    deviennent bruitees ; sans observation du tout on ne normalise pas,
+    sinon la de-normalisation ecraserait la prediction.
+    """
     m = mask.to(P.dtype)
-    n = m.sum(dim=1, keepdim=True).clamp(min=1.0)
+    n = m.sum(dim=1, keepdim=True)
+    has_obs = n > 0
+    n = n.clamp(min=1.0)
+
     mu = (P * m).sum(dim=1, keepdim=True) / n
     var = (((P - mu) * m) ** 2).sum(dim=1, keepdim=True) / n
-    return mu, var.sqrt().clamp(min=eps)
+    sd = var.sqrt().clamp(min=eps)
+
+    mu = torch.where(has_obs, mu, torch.zeros_like(mu))
+    sd = torch.where(has_obs, sd, torch.ones_like(sd))
+    return mu, sd
+
 
 
 class Model(BaseForecaster):
