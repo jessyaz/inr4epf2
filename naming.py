@@ -14,7 +14,7 @@ ABLATED = "ablated"
 
 
 def experiment_name(cfg):
-    return f"icassp_{cfg.dataset.name}_{cfg.registry}"
+    return f"icassp_V1_{cfg.dataset.name}_{cfg.registry}"
 
 
 def main_run(registry, uid):
