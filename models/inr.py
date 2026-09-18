@@ -20,13 +20,19 @@ decrit dans le papier.
   model.inr.layer_norm LayerNorm apres chaque modulation FiLM. Stabilise une
                        pile profonde ou le produit des gamma peut deriver.
   model.inr.skip       connexion residuelle entre couches de l'INR.
+  model.static_exog    le code exogene est fige sur tout l'horizon au lieu
+                       de varier a chaque pas. C'est le conditionnement des
+                       INR existants. L'information disponible est
+                       IDENTIQUE -- l'etat final du LSTM a parcouru tout
+                       l'horizon --, seule sa resolution temporelle change :
+                       l'ablation isole donc le mecanisme, pas le contenu.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.basemodel import BaseForecaster
+from models.base_model import BaseForecaster
 
 # bande utile pour un lookback de 168 h : 84 = Nyquist
 FREQ_MIN = 0.875
@@ -83,6 +89,9 @@ class INR(nn.Module):
                                      for i in range(c.num_layers)])
         self.output_layer = nn.Linear(c.hidden_dim, c.output_dim)
 
+        if bool(getattr(c, "siren_init", False)):
+            self._siren_init()
+
         self.norms = nn.ModuleList(
             [nn.LayerNorm(c.hidden_dim) for _ in range(c.num_layers)]
         ) if self.use_layer_norm else None
@@ -91,6 +100,29 @@ class INR(nn.Module):
         if c.activation not in acts:
             raise ValueError(f"activation inconnue : {c.activation}")
         self.activation = acts[c.activation]
+
+    def _siren_init(self):
+        """Initialisation uniforme en 1/sqrt(fan_in), facon SIREN.
+
+        L'entree est un encodage de Fourier : ses composantes sont deja
+        bornees dans [-1, 1] et fortement correlees entre elles. L'init par
+        defaut de PyTorch (Kaiming, calibree pour des entrees decorrelees et
+        une activation ReLU) produit alors des pre-activations de variance
+        mal controlee, et certaines graines divergent en debut
+        d'entrainement.
+        """
+        with torch.no_grad():
+            for layer in self.layers:
+                fan_in = layer.weight.shape[1]
+                bound = (1.0 / fan_in) ** 0.5
+                layer.weight.uniform_(-bound, bound)
+                if layer.bias is not None:
+                    layer.bias.zero_()
+            fan_in = self.output_layer.weight.shape[1]
+            bound = (1.0 / fan_in) ** 0.5
+            self.output_layer.weight.uniform_(-bound, bound)
+            if self.output_layer.bias is not None:
+                self.output_layer.bias.zero_()
 
     def set_epoch(self, epoch):
         self.fourier.set_epoch(epoch)
@@ -151,40 +183,24 @@ class DeepSetsEncoder(nn.Module):
     def forward(self, elements, mask):
         e = self.phi(elements)
         m = mask.unsqueeze(-1).to(e.dtype)
-        n_obs = m.sum(dim=1)
 
-
+        # les positions masquees ne contribuent ni a la moyenne ni au max :
+        # la valeur qu'elles portent n'a aucun effet sur la sortie
         mean_pool = (e * m).sum(dim=1) / m.sum(dim=1).clamp(min=1.0)
         max_pool = e.masked_fill(m == 0, float("-inf")).max(dim=1).values
         max_pool = torch.nan_to_num(max_pool, neginf=0.0)   # fenetre vide
 
         z = torch.cat([mean_pool, max_pool], dim=-1)
-
-        if self.norm is not None:
-            z = torch.where(n_obs > 0, self.norm(z), z)
         return self.norm(z) if self.norm is not None else z
 
 
-def masked_stats(P, mask, eps=0.1):
-    """Moyenne et ecart-type sur les seules positions observees. (B, 1)
-
-    Sous masquage fort ces statistiques reposent sur tres peu de points et
-    deviennent bruitees ; sans observation du tout on ne normalise pas,
-    sinon la de-normalisation ecraserait la prediction.
-    """
+def masked_stats(P, mask, eps=1e-3):
+    """Moyenne et ecart-type sur les seules positions observees. (B, 1)"""
     m = mask.to(P.dtype)
-    n = m.sum(dim=1, keepdim=True)
-    has_obs = n > 0
-    n = n.clamp(min=1.0)
-
+    n = m.sum(dim=1, keepdim=True).clamp(min=1.0)
     mu = (P * m).sum(dim=1, keepdim=True) / n
     var = (((P - mu) * m) ** 2).sum(dim=1, keepdim=True) / n
-    sd = var.sqrt().clamp(min=eps)
-
-    mu = torch.where(has_obs, mu, torch.zeros_like(mu))
-    sd = torch.where(has_obs, sd, torch.ones_like(sd))
-    return mu, sd
-
+    return mu, var.sqrt().clamp(min=eps)
 
 
 class Model(BaseForecaster):
@@ -197,6 +213,7 @@ class Model(BaseForecaster):
 
         self.use_exog = bool(getattr(c, "use_exog", True))
         self.use_lookback = bool(getattr(c, "use_lookback", True))
+        self.static_exog = bool(getattr(c, "static_exog", False))
         self.revin = bool(getattr(c, "revin", False))
         self.norm_deepsets = bool(getattr(c, "norm_deepsets", True))
 
@@ -265,6 +282,11 @@ class Model(BaseForecaster):
             _, (h, c) = self.lstm_past(X_look)
             # etat exogene a chaque pas de l'horizon, en une seule passe
             h_fut, _ = self.lstm_future(X_fut, (h, c))         # (B, H, d)
+            if self.static_exog:
+                # ablation : un seul code pour tout l'horizon. L'etat final
+                # a deja parcouru les H pas, donc le contenu informationnel
+                # est le meme ; seule disparait la variation avec t.
+                h_fut = h_fut[:, -1:].expand(-1, H, -1)
             parts.append(h_fut)
 
         # code de fenetre constant sur l'horizon, concatene a l'etat exogene

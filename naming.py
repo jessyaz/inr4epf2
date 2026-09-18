@@ -3,10 +3,14 @@
 Toute composition de nom passe par ici : aucune chaine n'est fabriquee
 ailleurs dans le projet.
 
-    experiment      icassp_{dataset}_{registry}
+    experiment      icassp_V1_{dataset}_{registry}[_{suffix}]
     run principal   {registry}_main_{uid}          -- produit par runner.py
     ablation        {registry}_ablated_{uid}       -- modele sans lookback
     sous-run POD    {registry}_{uid}_{rate}        -- un par point de grille
+
+Le suffixe optionnel (cfg.exp_suffix) isole une campagne d'ablation dans sa
+propre experience, pour que le balayage POD ne melange pas des variantes
+d'architecture avec les runs principaux.
 """
 
 MAIN = "main"
@@ -14,7 +18,9 @@ ABLATED = "ablated"
 
 
 def experiment_name(cfg):
-    return f"icassp_V1_{cfg.dataset.name}_{cfg.registry}"
+    base = f"icassp_V1_{cfg.dataset.name}_{cfg.registry}"
+    suffix = cfg.get("exp_suffix", None)
+    return f"{base}_{suffix}" if suffix else base
 
 
 def main_run(registry, uid):
