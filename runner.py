@@ -14,12 +14,13 @@ from utils.trainer import train
 from models.baselines.mlp import Model as mlp
 from models.baselines.lear import Model as lear
 from models.baselines.dnn import Model as dnn
+from models.inr import Model as inr
 
 MODEL_REGISTRY = {
     "mlp": mlp,
     "lear": lear,
     "dnn": dnn,
-    # "inr": ...,
+    "inr": inr,
 }
 
 
