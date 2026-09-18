@@ -52,12 +52,12 @@ model:
     pe_learnable: false
     activation: gelu
     film_hidden_dim: 256
-    layer_norm: false   # ablation
+    layer_norm: true   # ablation
     skip: false         # ablation
 
   optim:
-    lr: 1e-3
-    lr_inr: 1e-3
+    lr: 3e-4
+    lr_inr: 3e-4
     lr_pe: 1e-4
     weight_decay: 0.0
 

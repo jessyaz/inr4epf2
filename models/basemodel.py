@@ -49,8 +49,28 @@ class BaseForecaster(nn.Module, ABC):
 
     @classmethod
     def load(cls, cfg, path, map_location="cpu"):
+        from omegaconf import OmegaConf
+        d = torch.load(path, map_location=map_location, weights_only=False)
+
+        if isinstance(d, dict) and "model_cfg" in d:
+            saved = d["model_cfg"]
+            current = OmegaConf.to_container(cfg.model, resolve=True)
+            # certains reglages ne changent aucun parametre (revin,
+            # pe_learnable...) : le state_dict se charge sans erreur alors
+            # que le modele ne fait pas la meme chose
+            diff = {k for k in set(saved) | set(current)
+                    if saved.get(k) != current.get(k)}
+            if diff:
+                raise ValueError(
+                    f"config du checkpoint differente sur {sorted(diff)} ; "
+                    f"le modele reconstruit ne correspond pas aux poids"
+                )
+            sd = d["state_dict"]
+        else:
+            sd = d
+
         m = cls(cfg)
-        m.load_state_dict(torch.load(path, map_location=map_location))
+        m.load_state_dict(sd)
         return m
 
     # -- utilitaires --------------------------------------------------------
