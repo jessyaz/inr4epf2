@@ -32,7 +32,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.base_model import BaseForecaster
+from models.basemodel import BaseForecaster
 
 # bande utile pour un lookback de 168 h : 84 = Nyquist
 FREQ_MIN = 0.875
