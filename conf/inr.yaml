@@ -33,7 +33,7 @@ model:
   use_lookback: true
 
   # --- variantes d'ablation, toutes desactivables -----------------------
-  revin: false          # normalisation par fenetre sur positions observees
+  revin: true          # normalisation par fenetre sur positions observees
   norm_deepsets: true   # LayerNorm sur le code de fenetre
 
   deepsets:
