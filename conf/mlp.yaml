@@ -1,0 +1,54 @@
+registry: mlp
+seed: 0
+device: auto
+model_uid: null
+run_dir: null
+
+dataset:
+  name: PJM
+  processed_dir: ./datasets/processed
+  batch_size: 64
+  num_workers: 4
+
+window:
+  lookback: 168
+  horizon: 24
+  stride_train: 1
+  stride_eval: 24
+
+masking:
+  rate: 0.0
+  mechanism: mcar
+  block_mean: 12
+
+train:
+  num_epochs: 100
+  patience: 20
+  plot_every: 10
+  save_checkpoint: true
+
+model:
+  hidden_dim: 512
+  exog_dim: 2
+  dropout: 0.1
+  use_mask: true
+  use_exog: true
+  fill_value: 0.0
+  optim:
+    lr: 1e-3
+    weight_decay: 1e-4
+
+pod:
+  rates: [0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 0.95, 1.0]
+  mechanisms: [mcar, block]
+  train_seeds: [0,1,2,3,4]              # [0,1,2,3,4] pour les réseaux, [0] pour LEAR
+  mask_seeds: [0, 1, 2, 3, 4]
+  recalib_on_masked: false
+  run_ablation: true
+  out_dir: ./results/pod
+
+mlflow:
+  enabled: true
+  force_offline: false
+  experiment_name: epf_icassp
+  run_name: null

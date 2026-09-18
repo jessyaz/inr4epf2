@@ -1,0 +1,56 @@
+registry: lear
+model_uid: null
+run_dir: null
+
+seed: 0
+device: cpu
+
+dataset:
+  name: PJM
+  raw_dir: ./raw
+  processed_dir: ./datasets/processed
+  batch_size: 256
+  num_workers: 0
+
+window:
+  lookback: 168
+  horizon: 24
+  stride_train: 24
+  stride_eval: 24
+
+masking:
+  rate: 0.0
+  mechanism: mcar
+  block_mean: 12
+
+train:
+  num_epochs: 0
+  patience: 0
+  plot_every: 0
+  save_checkpoint: true
+
+model:
+  price_lags: [1, 2, 3, 7]
+  exog_lags: [0, 1, 7]
+  criterion: bic
+  max_iter: 2500
+  imputation: seasonal
+  recalib_every: 7
+  use_val: true
+  use_dummies: true
+  calibration_windows: [84, 1092, 0]   # 0 = tout l'historique # we delete 56 cuz github issue
+
+pod:
+  rates: [0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 0.95, 1.0]
+  mechanisms: [mcar, block]
+  train_seeds: [0]              # [0,1,2,3,4] pour les réseaux, [0] pour LEAR
+  mask_seeds: [0, 1, 2, 3, 4]
+  recalib_on_masked: false
+  run_ablation: true
+  out_dir: ./results/pod
+
+mlflow:
+  enabled: true
+  force_offline: false
+  experiment_name: epf_icassp
+  run_name: null

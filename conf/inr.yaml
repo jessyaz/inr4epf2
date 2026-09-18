@@ -1,0 +1,77 @@
+registry: inr
+model_uid: null
+run_dir: null
+
+seed: 0
+device: auto
+
+dataset:
+  name: DE
+  processed_dir: ./datasets/processed
+  batch_size: 64
+  num_workers: 4
+
+window:
+  lookback: 168
+  horizon: 24
+  stride_train: 6     # le DeepSets n'exige pas de fenetres alignees
+  stride_eval: 24     # une prevision par jour : impose par le protocole
+
+masking:
+  rate: 0.0
+  mechanism: mcar
+  block_mean: 12
+
+train:
+  num_epochs: 300
+  patience: 30
+  plot_every: 0
+  save_checkpoint: true
+
+model:
+  use_exog: true
+  use_lookback: true
+
+  # --- variantes d'ablation, toutes desactivables -----------------------
+  revin: false          # normalisation par fenetre sur positions observees
+  norm_deepsets: true   # LayerNorm sur le code de fenetre
+
+  deepsets:
+    input_dim: 2        # (temps, prix)
+    hidden_dim: 128
+
+  lstm:
+    input_dim: 2        # nb de variables exogenes
+    hidden_dim: 128
+
+  inr:
+    num_layers: 4
+    hidden_dim: 256
+    output_dim: 1
+    num_frequencies: 64
+    pe_learnable: true
+    activation: gelu
+    film_hidden_dim: 256
+    layer_norm: false   # ablation
+    skip: false         # ablation
+
+  optim:
+    lr: 1e-3
+    lr_inr: 1e-3
+    lr_pe: 1e-4
+    weight_decay: 0.0
+
+pod:
+  model_uid: null
+  rates: [0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 0.95, 1.0]
+  mechanisms: [mcar, block]
+  mask_seeds: [0, 1, 2, 3, 4]
+  recalib_on_masked: false
+  run_ablation: true
+  out_dir: ./results/pod
+
+mlflow:
+  enabled: true
+  force_offline: false
+  experiment_name: null    # derive : icassp_{dataset}_{registry}
+  run_name: null

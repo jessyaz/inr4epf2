@@ -1,0 +1,58 @@
+# --- Bibliothèque externe (clonée par build.sh, jamais vendorisée) ---
+lib/epftoolbox/
+
+models/git-src/
+models/git_src/
+
+datasets/processed/
+datasets/raw/
+
+
+# --- Données brutes et générées (régénérables, pas versionnées) ---
+data/*.csv
+datasets/raw/*.csv
+datasets/processed/*.pkl
+!datasets/raw/.gitkeep
+!datasets/processed/.gitkeep
+
+# --- Logs et runs (Hydra, MLflow, entraînements) ---
+outputs/
+runs/
+mlruns/
+optuna_studies/
+*.log
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# --- Environnements virtuels ---
+.venv/
+venv/
+env/
+
+
+
+# --- IDE ---
+.idea/
+*.iml
+.vscode/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Secrets / config locale ---
+.env
+*.local.yaml
+
+# --- A GARDER (ne pas ignorer, malgré des patterns similaires) ---
+!uv_last.lock
+!pyproject.toml
+!conf/*.yaml
+!datasets/datasets.yaml

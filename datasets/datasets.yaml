@@ -1,0 +1,9 @@
+data:
+  data_dir: "./datasets/raw"
+  markets:
+    - PJM
+    - NP
+    - BE
+    - FR
+    - DE
+  normalize_method: "Median"   # Norm | Norm1 | Std | Median | Invariant

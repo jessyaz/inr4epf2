@@ -1,0 +1,39 @@
+dataset:
+  batch_size: 64
+  name: PJM
+  num_workers: 4
+  processed_dir: ./datasets/processed
+device: auto
+masking:
+  block_mean: 12
+  mechanism: mcar
+  rate: 0.0
+mlflow:
+  enabled: true
+  experiment_name: epf_icassp
+  force_offline: false
+  run_name: null
+model:
+  dropout: 0.1
+  exog_dim: 2
+  fill_value: 0.0
+  hidden_dim: 512
+  optim:
+    lr: 0.001
+    weight_decay: 0.0001
+  use_exog: true
+  use_mask: true
+model_uid: b47610f2
+registry: mlp
+run_dir: runs/b47610f2
+seed: 0
+train:
+  num_epochs: 100
+  patience: 20
+  plot_every: 10
+  save_checkpoint: true
+window:
+  horizon: 24
+  lookback: 168
+  stride_eval: 24
+  stride_train: 1

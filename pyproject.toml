@@ -1,0 +1,34 @@
+[project]
+name = "inr-icassp"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = "==3.11.*"
+
+dependencies = [
+    "hydra-core>=1.3.5",
+    "pandas>=3.0.5",
+    "tqdm>=4.70.0",
+    #"protobuf==3.19.4",
+    "protobuf>=3.20.3,<4.21.0",
+    "epftoolbox",
+    "torch==2.2.2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "torch==2.7.1; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "tensorflow==2.16.2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "tensorflow; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "mlflow>=1.27.0",
+    #"mlflow==3.0.0",
+    "setuptools<74",
+    "dotenv>=0.9.9",
+    "boto3>=1.43.83",
+    "hydra-optuna-sweeper>=1.2.0",
+    "optuna>=2.10.1,<3.0.0",
+    "alembic<1.8",
+    "sqlalchemy<2.0",
+    "matplotlib",
+    "reformer-pytorch>=1.4.4",
+    "xgboost>=3.2.0",
+    "scikit-learn>=1.9.1",
+]
+
+[tool.uv.sources]
+epftoolbox = { path = "./lib/epftoolbox", editable = true }

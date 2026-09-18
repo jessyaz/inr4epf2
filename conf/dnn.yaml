@@ -1,0 +1,58 @@
+registry: dnn
+model_uid: null
+run_dir: null
+
+seed: 0
+device: auto
+
+dataset:
+  name: DE
+  processed_dir: ./datasets/processed
+  batch_size: 64
+  num_workers: 4
+
+window:
+  lookback: 168
+  horizon: 24
+  stride_train: 24    # fenetres alignees sur les journees, comme LEAR :
+  stride_eval: 24     # les features J-1/J-2/J-3/J-7 l'exigent
+
+masking:
+  rate: 0.0
+  mechanism: mcar
+  block_mean: 12
+
+train:
+  num_epochs: 300
+  patience: 30
+  plot_every: 0
+  save_checkpoint: true
+
+model:
+  price_lags: [1, 2, 3, 7]
+  exog_lags: [0, 1, 7]
+  exog_dim: 2
+  hidden_1: 256
+  hidden_2: 128
+  dropout: 0.1
+  imputation: seasonal
+  use_dummies: true
+  use_lookback: true
+  optim:
+    lr: 1e-3
+    weight_decay: 1e-4
+
+pod:
+  model_uid: null
+  rates: [0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 0.95, 1.0]
+  mechanisms: [mcar, block]
+  mask_seeds: [0, 1, 2, 3, 4]
+  recalib_on_masked: false
+  run_ablation: true
+  out_dir: ./results/pod
+
+mlflow:
+  enabled: true
+  force_offline: false
+  experiment_name: null    # derive : icassp_{dataset}_{registry}
+  run_name: null
