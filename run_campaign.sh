@@ -25,6 +25,11 @@
 #
 # LEAR est deterministe : un seul run par marche. Les autres en ont cinq.
 #
+# Ordonnancement : LEAR occupe le CPU, les modeles a gradient le GPU. Les
+# deux tournent en parallele. LEAR reste en serie car sklearn sature deja
+# les coeurs disponibles ; le paralleliser ferait se disputer les memes
+# ressources.
+#
 # Usage :  bash run_campaign.sh          # tout
 #          bash run_campaign.sh train    # estimation seule
 #          bash run_campaign.sh pod      # balayages seuls
@@ -34,9 +39,9 @@ set -u
 
 MARKETS="NP PJM BE FR DE"
 SEEDS="0 1 2 3 4"
-GRAD="dnn transformer_imputed transformer_masked inr"      # noms de config
+GRAD="dnn transformer_imputed transformer_masked inr"   # noms de config
 ALL_POD="lear dnn transformer_imputed transformer_masked inr"
-NPAR=4
+NPAR=2                       # runs GPU simultanes
 LOGDIR="logs/$(date +%m%d_%H%M)"
 
 STAGE=${1:-all}
@@ -45,11 +50,14 @@ mkdir -p "$LOGDIR"
 # ---------------------------------------------------------------------------
 
 run_lear () {
-  echo "=== LEAR (CPU) ==="
+  echo "=== LEAR (CPU, en serie) ==="
   for m in $MARKETS; do
-    echo "uv run runner.py --config-name=lear dataset.name=$m"
-    echo "uv run runner.py --config-name=lear dataset.name=$m model.use_lookback=false"
-  done | xargs -P 5 -I{} bash -c '{}' > "$LOGDIR/lear.log" 2>&1
+    echo "  [$m]"
+    uv run runner.py --config-name=lear dataset.name=$m \
+      >> "$LOGDIR/lear.log" 2>&1 || echo "    ECHEC"
+    uv run runner.py --config-name=lear dataset.name=$m \
+      model.use_lookback=false >> "$LOGDIR/lear.log" 2>&1 || echo "    ECHEC (ablate)"
+  done
   echo "  -> $LOGDIR/lear.log"
 }
 
@@ -106,13 +114,15 @@ run_ablation () {
 
 case "$STAGE" in
   train)
-    run_lear & run_grad ; wait ;;
+    run_lear &
+    LEAR_PID=$!
+    run_grad
+    wait $LEAR_PID ;;
   pod)
     run_pod ;;
   ablation)
     run_ablation ;;
   all)
-    # LEAR (CPU) et les reseaux (GPU) n'utilisent pas les memes ressources
     run_lear &
     LEAR_PID=$!
     run_grad
@@ -126,12 +136,16 @@ esac
 echo
 echo "=== recapitulatif ==="
 echo "fichiers de resultats : $(ls results/pod/*/raw_*.csv 2>/dev/null | wc -l)"
-echo "echecs                : $(grep -h -c 'Error executing job' "$LOGDIR"/*.log 2>/dev/null | paste -sd+ | bc)"
+echo "echecs                : $(grep -h 'Error executing job' "$LOGDIR"/*.log 2>/dev/null | wc -l)"
 
-cat <<EOF
+cat <<'EOF'
 
 Suite :
   uv run python summarize_pod.py
   uv run python summarize_pod.py --mechanism block
   uv run python compare_ablation.py --market DE
+
+Controle : les deux variantes de Transformer doivent donner le meme MAE a
+rate = 0, l'imputation n'ayant alors aucun effet. Un ecart superieur a la
+dispersion inter-graines signale un probleme.
 EOF
