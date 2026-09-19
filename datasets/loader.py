@@ -190,10 +190,12 @@ def load_market(market, processed_dir="./datasets/processed"):
         return pickle.load(f)
 
 
-def build_loader(series, dates=None, lookback=168, horizon=24, stride=1,
+def build_loader(market, split, lookback=168, horizon=24, stride=1,
                  rate=0.0, mechanism="mcar", block_mean=12, seed=0,
                  batch_size=64, shuffle=False, num_workers=4):
-    ds = EPFWindowDataset(series, dates, lookback, horizon, stride,
+
+    ds = EPFWindowDataset(market[split], market.get(f"dates_{split}"),
+                          lookback, horizon, stride,
                           rate, mechanism, block_mean, seed)
     return DataLoader(ds, batch_size=batch_size, shuffle=shuffle,
                       num_workers=num_workers, pin_memory=True,
@@ -223,7 +225,7 @@ def checks(market="PJM", processed_dir="./datasets/processed"):
     print("1. inversion scaler OK :", np.isfinite(back).all())
 
     # 2. formes
-    ld = build_loader(d["test"], d["dates_test"], stride=24, rate=0.30,
+    ld = build_loader(d, "test", stride=24, rate=0.30,
                       mechanism="block", seed=7, num_workers=0)
     b = next(iter(ld))
     print("2. formes :", {k: tuple(v.shape) for k, v in b.items()})
@@ -232,7 +234,7 @@ def checks(market="PJM", processed_dir="./datasets/processed"):
     print("3. taux effectif (split complet) :")
     for mech in ("mcar", "mnar", "block"):
         for nominal in (0.1, 0.3, 0.5, 0.9):
-            l = build_loader(d["test"], d["dates_test"], stride=24,
+            l = build_loader(d, "test", stride=24,
                              rate=nominal, mechanism=mech, seed=7,
                              num_workers=0)
             tot = sum((~bb["mask"]).float().sum().item() for bb in l)
@@ -240,7 +242,7 @@ def checks(market="PJM", processed_dir="./datasets/processed"):
             print(f"   {mech:5s} nominal={nominal:.2f} -> effectif={tot/n:.3f}")
 
     # 4. reproductibilite : deux passes -> meme masque
-    b2 = next(iter(build_loader(d["test"], d["dates_test"], stride=24,
+    b2 = next(iter(build_loader(d, "test", stride=24,
                                 rate=0.30, mechanism="block", seed=7,
                                 num_workers=0)))
     print("4. masque reproductible :", torch.equal(b["mask"], b2["mask"]))
@@ -261,7 +263,7 @@ def checks(market="PJM", processed_dir="./datasets/processed"):
     print("6. dow coherent avec les dates :", ok)
 
     # 7. taux = 1.0 -> aucune observation
-    ld1 = build_loader(d["test"], d["dates_test"], stride=24, rate=1.0,
+    ld1 = build_loader(d, "test", stride=24, rate=1.0,
                        num_workers=0)
     b1 = next(iter(ld1))
     print("7. rate=1.0 -> 0 observation :", (~b1["mask"]).all().item())

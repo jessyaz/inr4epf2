@@ -96,7 +96,7 @@ def ensure_ready(model, cfg, d, common, seed):
               "non serialise : evaluation sans recalibration glissante")
         return
 
-    clean = build_loader(d["test"], d["dates_test"],
+    clean = build_loader(d, "test",
                          stride=cfg.window.stride_eval,
                          rate=0.0, seed=seed, **common)
     model.prepare_test(clean, None)
@@ -115,7 +115,7 @@ def build_common(cfg):
 
 def evaluate(model, cfg, d, common, rate, mechanism, seed, device):
     w, m = cfg.window, cfg.masking
-    loader = build_loader(d["test"], d["dates_test"], stride=w.stride_eval,
+    loader = build_loader(d, "test", stride=w.stride_eval,
                           rate=rate, mechanism=mechanism,
                           block_mean=m.block_mean, seed=seed, **common)
 
