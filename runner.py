@@ -16,12 +16,16 @@ from models.baselines.lear import Model as lear
 from models.baselines.dnn import Model as dnn
 from models.inr import Model as inr
 from models.git_interfaces.epf_transformer import Model as epf_transformer
+from models.masked_transformer import Model as masked_transformer
 
 MODEL_REGISTRY = {
     "mlp": mlp,
     "lear": lear,
     "dnn": dnn,
     "inr": inr,
+    "epf_transformer": epf_transformer,
+    "masked_transformer": masked_transformer,
+
 }
 
 
