@@ -80,8 +80,7 @@ def train(model, loaders, optimizer, device, logger=None):
                     g["lr"] = base * f
 
             pred = model.forward_step(batch, device)
-            target = batch["Y"].to(device)
-            loss = ((pred - target) ** 2).mean()
+            loss = model.loss(batch, device)
 
             optimizer.zero_grad()
             loss.backward()

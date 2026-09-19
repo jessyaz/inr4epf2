@@ -32,6 +32,15 @@ class BaseForecaster(nn.Module, ABC):
 
     # -- optionnel ----------------------------------------------------------
 
+    def loss(self, batch, device):
+        """Perte d'entrainement. Par defaut, MSE sur l'horizon.
+
+        Un modele dont la supervision differe (cible dense, terme auxiliaire)
+        surcharge cette methode plutot que de contraindre le trainer.
+        """
+        pred = self.forward_step(batch, device)
+        return ((pred - batch["Y"].to(device)) ** 2).mean()
+
     def set_epoch(self, epoch):
         """Appele en debut de chaque epoch. A surcharger si besoin."""
 
