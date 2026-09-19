@@ -183,6 +183,7 @@ class DeepSetsEncoder(nn.Module):
     def forward(self, elements, mask):
         e = self.phi(elements)
         m = mask.unsqueeze(-1).to(e.dtype)
+        n_obs = m.sum(dim=1)
 
         # les positions masquees ne contribuent ni a la moyenne ni au max :
         # la valeur qu'elles portent n'a aucun effet sur la sortie
@@ -191,6 +192,9 @@ class DeepSetsEncoder(nn.Module):
         max_pool = torch.nan_to_num(max_pool, neginf=0.0)   # fenetre vide
 
         z = torch.cat([mean_pool, max_pool], dim=-1)
+        if self.norm is not None:
+            z = torch.where(n_obs > 0, self.norm(z), z)
+
         return self.norm(z) if self.norm is not None else z
 
 
