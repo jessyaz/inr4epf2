@@ -15,7 +15,7 @@ dataset:
 window:
   lookback: 168      # un jeton par heure
   horizon: 24
-  stride_train: 6    # l'attention masquee n'exige pas de fenetres alignees
+  stride_train: 6    # aucune contrainte d'alignement journalier
   stride_eval: 24
 
 masking:
@@ -32,13 +32,18 @@ train:
   grad_clip: 1.0
 
 model:
+  # seule ligne qui distingue les deux variantes
+  masked_attention: true
+  imputation: linear          # utilisee par la variante imputee seulement
+
   embedding_dim: 64
   num_heads: 4
   dim_feedforward: 128
   num_layers: 3
-  normalize_first: true   # pre-norm : plus stable sur une pile profonde
+  normalize_first: true
   dropout: 0.1
   activation: gelu
+
   exog_dim: 2
   use_lookback: true
 
