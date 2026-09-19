@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 import torch
 import torch.nn as nn
 
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 
 
 class BaseForecaster(nn.Module, ABC):
@@ -52,24 +52,18 @@ class BaseForecaster(nn.Module, ABC):
 
     @classmethod
     def load(cls, cfg, path, map_location="cpu"):
-        from omegaconf import OmegaConf
         d = torch.load(path, map_location=map_location, weights_only=False)
 
         if isinstance(d, dict) and "model_cfg" in d:
-            saved = d["model_cfg"]
-            current = OmegaConf.to_container(cfg.model, resolve=True)
-            # certains reglages ne changent aucun parametre (revin,
-            # pe_learnable...) : le state_dict se charge sans erreur alors
-            # que le modele ne fait pas la meme chose
-            diff = {k for k in set(saved) | set(current)
-                    if saved.get(k) != current.get(k)}
-            if diff:
-                raise ValueError(
-                    f"config du checkpoint differente sur {sorted(diff)} ; "
-                    f"le modele reconstruit ne correspond pas aux poids"
-                )
+            # le modele est reconstruit avec la config du CHECKPOINT :
+            # certains reglages (use_lookback, use_exog, static_exog...)
+            # changent la structure, et le YAML courant peut differer
+            cfg = cfg.copy()
+            with open_dict(cfg):
+                cfg.model = OmegaConf.create(d["model_cfg"])
             sd = d["state_dict"]
         else:
+            print("      [load] checkpoint sans configuration")
             sd = d
 
         m = cls(cfg)
