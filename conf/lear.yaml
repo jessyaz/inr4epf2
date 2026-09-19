@@ -36,7 +36,7 @@ model:
   exog_lags: [0, 1, 7]
   criterion: bic
   max_iter: 2500
-  imputation: seasonal
+  imputation: linear
   recalib_every: 7
   use_val: true
   use_dummies: true

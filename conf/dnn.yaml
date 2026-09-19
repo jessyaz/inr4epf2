@@ -35,7 +35,7 @@ model:
   hidden_1: 256
   hidden_2: 128
   dropout: 0.1
-  imputation: seasonal
+  imputation: linear
   use_dummies: true
   use_lookback: true
   optim:

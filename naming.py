@@ -18,7 +18,7 @@ ABLATED = "ablated"
 
 
 def experiment_name(cfg):
-    base = f"icassp_V2_{cfg.dataset.name}_{cfg.registry}"
+    base = f"icassp_V3_{cfg.dataset.name}_{cfg.registry}"
     suffix = cfg.get("exp_suffix", None)
     return f"{base}_{suffix}" if suffix else base
 
