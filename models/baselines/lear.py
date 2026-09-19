@@ -131,7 +131,7 @@ class Model(BaseForecaster):
 
     # -- features -----------------------------------------------------------
 
-    def _features(self, P, X_look, X_fut, t=None):
+    def _features(self, P, X_look, X_fut, dow=None):
         feats = []
 
         # use_lookback=False : modele ablate, aucun prix passe en regresseur.
@@ -146,14 +146,19 @@ class Model(BaseForecaster):
                 feats.append(X_look[:, DAY_SLICES[l]].reshape(X_look.shape[0], -1))
 
         if self.use_dummies:
-            # 7 dummies de jour de semaine. Le jour vient de l'indice temporel
-            # absolu : avec stride 24, deux fenetres consecutives sont deux
-            # jours consecutifs, donc t // 24 mod 7 les identifie de facon
-            # coherente sans connaitre la date calendaire.
-            day = (t // 24) % 7
-            dow = np.zeros((len(day), 7), dtype=np.float32)
-            dow[np.arange(len(day)), day] = 1.0
-            feats.append(dow)
+            # 7 dummies de jour de semaine (Lago : 247 regresseurs = 240 + 7).
+            # Le jour vient des dates reelles, fournies par le loader : le
+            # deduire de l'indice de fenetre donnerait une origine du cycle
+            # differente entre entrainement et test, donc des dummies
+            # designant des jours differents de part et d'autre.
+            if dow is None:
+                raise ValueError(
+                    "use_dummies=True mais le batch ne porte pas 'dow' ; "
+                    "le loader doit recevoir les dates du marche"
+                )
+            oh = np.zeros((len(dow), 7), dtype=np.float32)
+            oh[np.arange(len(dow)), dow] = 1.0
+            feats.append(oh)
 
         return np.concatenate(feats, axis=1)
 
@@ -161,10 +166,11 @@ class Model(BaseForecaster):
         from datasets.loader import apply_strategy
         P, _ = apply_strategy(batch["P_look"].cpu(), batch["mask"].cpu(),
                               self.strategy)
+        dow = (batch["dow"].cpu().numpy() if "dow" in batch else None)
         return self._features(P.numpy(),
                               batch["X_look"].cpu().numpy(),
                               batch["X_fut"].cpu().numpy(),
-                              batch["t"].cpu().numpy())
+                              dow)
 
     def _collect(self, loader, desc):
         Xs, Ys, Ts = [], [], []
@@ -348,8 +354,6 @@ class Model(BaseForecaster):
                                  f"{spec.get(k)} vs {getattr(m, k)}")
 
         m.models = d["models"]
-        m.use_lookback = spec.get("use_lookback", m.use_lookback)   # <--
-        m.use_dummies = spec.get("use_dummies", m.use_dummies)
         m._recal = d.get("recal", {})
         m._recal_starts = d.get("recal_starts")
         m._t0_test = d.get("t0_test")

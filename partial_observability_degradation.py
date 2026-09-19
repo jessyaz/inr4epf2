@@ -30,8 +30,7 @@ Usage :
     uv run partial_observability_degradation.py --config-name=mlp  dataset.name=DE \\
         pod.model_uid=a3f1b2c9        # restreint a un seul run principal
 """
-#uv run partial_observability_degradation.py --config-name=lear  dataset.name=DE pod.model_uid=92bc3dbe
-# 92bc3dbe
+
 import itertools
 import json
 from pathlib import Path
@@ -97,7 +96,8 @@ def ensure_ready(model, cfg, d, common, seed):
               "non serialise : evaluation sans recalibration glissante")
         return
 
-    clean = build_loader(d["test"], stride=cfg.window.stride_eval,
+    clean = build_loader(d["test"], d["dates_test"],
+                         stride=cfg.window.stride_eval,
                          rate=0.0, seed=seed, **common)
     model.prepare_test(clean, None)
 
@@ -115,7 +115,7 @@ def build_common(cfg):
 
 def evaluate(model, cfg, d, common, rate, mechanism, seed, device):
     w, m = cfg.window, cfg.masking
-    loader = build_loader(d["test"], stride=w.stride_eval,
+    loader = build_loader(d["test"], d["dates_test"], stride=w.stride_eval,
                           rate=rate, mechanism=mechanism,
                           block_mean=m.block_mean, seed=seed, **common)
 

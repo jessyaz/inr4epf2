@@ -1,6 +1,24 @@
 """
 Loader EPF : fenetrage et masquage a la volee.
 
+Configuration :
+  - lookback (168 h) de prix  -> MASQUE
+  - lookback d'exogenes       -> intact
+  - horizon (24 h) d'exogenes -> intact (prevision TSO connue)
+  - horizon de prix           -> cible, intacte
+
+Le masque est derive de (seed, t) ou t est l'indice temporel ABSOLU de la
+fenetre. Consequence : une meme fenetre recoit toujours le meme masque,
+quels que soient le shuffle, le nombre de workers ou l'ordre d'iteration.
+C'est ce qui garantit que tous les bras (modele sans imputation, ffill,
+saisonniere, ...) voient EXACTEMENT le meme masque.
+
+Le batch porte aussi `dow`, le jour de la semaine du premier pas de
+l'horizon (0 = lundi), derive des dates reelles du marche. LEAR et le DNN
+s'en servent pour leurs dummies calendaires. Le deduire de l'indice de
+fenetre ne marcherait pas : cet indice repart de zero a chaque split, donc
+l'origine du cycle differe entre entrainement et test, et les dummies
+designeraient des jours differents de part et d'autre.
 """
 
 import pickle
@@ -30,22 +48,14 @@ def make_mask(L, rate, mechanism="mcar", prices=None, block_mean=12, rng=None):
         return rng.random(L) >= rate
 
     if mechanism == "mnar":
+        # absence d'autant plus probable que le prix est eleve
+        # (indisponibilites non declarees, publications retardees en
+        #  situation de tension)
         if prices is None:
             raise ValueError("mnar requiert les prix de la fenetre")
         r = np.argsort(np.argsort(prices)) / max(L - 1, 1)
         p = 0.3 + 1.7 * r
-        p = p * (rate * L / p.sum())
-        # le clipping a 1 perd de la masse : la redistribuer sur les
-        # positions non saturees jusqu'a atteindre le taux cible
-        for _ in range(50):
-            p = np.clip(p, 0.0, 1.0)
-            deficit = rate * L - p.sum()
-            if deficit < 1e-6:
-                break
-            free = p < 1.0
-            if not free.any():
-                break
-            p[free] += deficit * p[free] / p[free].sum()
+        p = p * (rate * L / p.sum())        # renormalise au taux cible
         return rng.random(L) >= np.clip(p, 0.0, 1.0)
 
     if mechanism == "block":
@@ -81,13 +91,17 @@ def make_mask(L, rate, mechanism="mcar", prices=None, block_mean=12, rng=None):
 
 class EPFWindowDataset(Dataset):
 
-    def __init__(self, series, lookback=168, horizon=24, stride=1,
+    def __init__(self, series, dates=None, lookback=168, horizon=24, stride=1,
                  rate=0.0, mechanism="mcar", block_mean=12, seed=0):
         self.s = torch.as_tensor(np.ascontiguousarray(series),
                                  dtype=torch.float32)          # (T, 3)
         self.L, self.H = lookback, horizon
         self.rate, self.mechanism = rate, mechanism
         self.block_mean, self.seed = block_mean, seed
+
+        # jour de la semaine reel, pour les dummies calendaires
+        self.dow = (pd.DatetimeIndex(dates).dayofweek.values.astype(np.int64)
+                    if dates is not None else None)
 
         n = len(self.s) - lookback - horizon + 1
         if n <= 0:
@@ -113,9 +127,13 @@ class EPFWindowDataset(Dataset):
                       block_mean=self.block_mean, rng=rng)
         )
 
-        return {"P_look": P_look, "mask": mask,
-                "X_look": X_look, "X_fut": X_fut, "Y": Y,
-                "t": torch.tensor(t)}
+        out = {"P_look": P_look, "mask": mask,
+               "X_look": X_look, "X_fut": X_fut, "Y": Y,
+               "t": torch.tensor(t)}
+        if self.dow is not None:
+            # jour du premier pas de l'horizon = jour predit
+            out["dow"] = torch.tensor(self.dow[t + self.L])
+        return out
 
 
 # --------------------------------------------------------------------------
@@ -172,10 +190,10 @@ def load_market(market, processed_dir="./datasets/processed"):
         return pickle.load(f)
 
 
-def build_loader(series, lookback=168, horizon=24, stride=1,
+def build_loader(series, dates=None, lookback=168, horizon=24, stride=1,
                  rate=0.0, mechanism="mcar", block_mean=12, seed=0,
                  batch_size=64, shuffle=False, num_workers=4):
-    ds = EPFWindowDataset(series, lookback, horizon, stride,
+    ds = EPFWindowDataset(series, dates, lookback, horizon, stride,
                           rate, mechanism, block_mean, seed)
     return DataLoader(ds, batch_size=batch_size, shuffle=shuffle,
                       num_workers=num_workers, pin_memory=True,
@@ -205,7 +223,7 @@ def checks(market="PJM", processed_dir="./datasets/processed"):
     print("1. inversion scaler OK :", np.isfinite(back).all())
 
     # 2. formes
-    ld = build_loader(d["test"], stride=24, rate=0.30,
+    ld = build_loader(d["test"], d["dates_test"], stride=24, rate=0.30,
                       mechanism="block", seed=7, num_workers=0)
     b = next(iter(ld))
     print("2. formes :", {k: tuple(v.shape) for k, v in b.items()})
@@ -214,15 +232,17 @@ def checks(market="PJM", processed_dir="./datasets/processed"):
     print("3. taux effectif (split complet) :")
     for mech in ("mcar", "mnar", "block"):
         for nominal in (0.1, 0.3, 0.5, 0.9):
-            l = build_loader(d["test"], stride=24, rate=nominal,
-                             mechanism=mech, seed=7, num_workers=0)
+            l = build_loader(d["test"], d["dates_test"], stride=24,
+                             rate=nominal, mechanism=mech, seed=7,
+                             num_workers=0)
             tot = sum((~bb["mask"]).float().sum().item() for bb in l)
             n = sum(bb["mask"].numel() for bb in l)
             print(f"   {mech:5s} nominal={nominal:.2f} -> effectif={tot/n:.3f}")
 
     # 4. reproductibilite : deux passes -> meme masque
-    b2 = next(iter(build_loader(d["test"], stride=24, rate=0.30,
-                                mechanism="block", seed=7, num_workers=0)))
+    b2 = next(iter(build_loader(d["test"], d["dates_test"], stride=24,
+                                rate=0.30, mechanism="block", seed=7,
+                                num_workers=0)))
     print("4. masque reproductible :", torch.equal(b["mask"], b2["mask"]))
 
     # 5. tous les bras voient le meme masque
@@ -233,10 +253,18 @@ def checks(market="PJM", processed_dir="./datasets/processed"):
     print("   ffill sans NaN :", torch.isfinite(p_ff).all().item())
     print("   seasonal sans NaN :", torch.isfinite(p_se).all().item())
 
-    # 6. taux = 1.0 -> aucune observation
-    ld1 = build_loader(d["test"], stride=24, rate=1.0, num_workers=0)
+    # 6. le jour de la semaine suit bien les dates reelles
+    import pandas as pd
+    dts = pd.DatetimeIndex(d["dates_test"])
+    ok = all(int(ld.dataset[i]["dow"]) == dts[int(ld.dataset.starts[i]) + 168].dayofweek
+             for i in range(5))
+    print("6. dow coherent avec les dates :", ok)
+
+    # 7. taux = 1.0 -> aucune observation
+    ld1 = build_loader(d["test"], d["dates_test"], stride=24, rate=1.0,
+                       num_workers=0)
     b1 = next(iter(ld1))
-    print("6. rate=1.0 -> 0 observation :", (~b1["mask"]).all().item())
+    print("7. rate=1.0 -> 0 observation :", (~b1["mask"]).all().item())
 
 
 if __name__ == "__main__":

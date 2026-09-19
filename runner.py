@@ -15,6 +15,7 @@ from models.baselines.mlp import Model as mlp
 from models.baselines.lear import Model as lear
 from models.baselines.dnn import Model as dnn
 from models.inr import Model as inr
+from models.git_interfaces.epf_transformer import Model as epf_transformer
 
 MODEL_REGISTRY = {
     "mlp": mlp,
@@ -41,14 +42,15 @@ def build_loaders(cfg):
                   batch_size=cfg.dataset.batch_size,
                   num_workers=cfg.dataset.num_workers)
 
-    train_loader = build_loader(d["train"], stride=w.stride_train,
+    train_loader = build_loader(d, "train", stride=w.stride_train,
                                 rate=0.0, shuffle=True, **common)
-    val_loader = build_loader(d["val"], stride=w.stride_eval,
+    val_loader = build_loader(d, "val", stride=w.stride_eval,
                               rate=0.0, **common)
-    test_loader = build_loader(d["test"], stride=w.stride_eval,
+    test_loader = build_loader(d, "test", stride=w.stride_eval,
                                rate=m.rate, mechanism=m.mechanism,
                                block_mean=m.block_mean, seed=cfg.seed,
                                **common)
+
     return train_loader, val_loader, test_loader, d["scaler"]
 
 

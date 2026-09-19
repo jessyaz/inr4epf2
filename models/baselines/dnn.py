@@ -76,7 +76,7 @@ class Model(BaseForecaster):
 
     # -- features : identiques a celles de LEAR -----------------------------
 
-    def _features(self, P, X_look, X_fut, t):
+    def _features(self, P, X_look, X_fut, dow):
         feats = []
 
         # use_lookback=False : modele ablate, aucun prix passe en entree
@@ -90,12 +90,15 @@ class Model(BaseForecaster):
                 feats.append(X_look[:, DAY_SLICES[l]].reshape(X_look.shape[0], -1))
 
         if self.use_dummies:
-            # avec stride 24, deux fenetres consecutives sont deux jours
-            # consecutifs : t // 24 mod 7 identifie le jour sans date
-            day = (t // 24) % 7
-            dow = torch.zeros(len(day), 7, dtype=P.dtype, device=P.device)
-            dow[torch.arange(len(day)), day] = 1.0
-            feats.append(dow)
+            # jour de la semaine reel, fourni par le loader (voir LEAR)
+            if dow is None:
+                raise ValueError(
+                    "use_dummies=True mais le batch ne porte pas 'dow' ; "
+                    "le loader doit recevoir les dates du marche"
+                )
+            oh = torch.zeros(len(dow), 7, dtype=P.dtype, device=P.device)
+            oh[torch.arange(len(dow), device=P.device), dow] = 1.0
+            feats.append(oh)
 
         return torch.cat(feats, dim=-1)
 
@@ -108,8 +111,9 @@ class Model(BaseForecaster):
         P = P.to(device)
         X_look = batch["X_look"].to(device)
         X_fut = batch["X_fut"].to(device)
+        dow = batch["dow"].to(device) if "dow" in batch else None
 
-        x = self._features(P, X_look, X_fut, batch["t"].to(device))
+        x = self._features(P, X_look, X_fut, dow)
         return self.net(x)
 
     def configure_optimizer(self):

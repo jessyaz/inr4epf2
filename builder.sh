@@ -16,6 +16,9 @@ else
     git clone "${EPFTOOLBOX_REPO}" "${LIB_DIR}"
 fi
 
+echo "[3/4] install external stuff"
+git clone https://github.com/osllogon/epf-transformers.git external/epf-transformers
+
 ### BEFORE PROD
 # Probleme probablement à ce niveau : --editable reer un workspace qui ne devrait pas exister
 #echo "[3/4] install"
