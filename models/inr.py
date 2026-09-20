@@ -195,7 +195,7 @@ class DeepSetsEncoder(nn.Module):
         if self.norm is not None:
             z = torch.where(n_obs > 0, self.norm(z), z)
 
-        return self.norm(z) if self.norm is not None else z
+        return z #self.norm(z) if self.norm is not None else z
 
 
 def masked_stats(P, mask, eps=1e-3):
