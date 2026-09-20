@@ -54,7 +54,7 @@ from runner import MODEL_REGISTRY
 # recuperation des modeles estimes
 # ---------------------------------------------------------------------------
 
-def locate(cfg, kind=MAIN):
+def locate_last(cfg, kind=MAIN):
     """[(client, run, uid)] des runs `{registry}_{kind}_*` de l'experience.
 
     Restreint a pod.model_uid s'il est renseigne. La recherche et le repli
@@ -70,6 +70,22 @@ def locate(cfg, kind=MAIN):
             continue
         out.append((client, run, uid))
     return out
+
+
+def locate(cfg, kind=MAIN):
+    reg = cfg.registry
+    want = cfg.pod.get("model_uid", None)
+
+    exp = cfg.mlflow.experiment_name or experiment_name(cfg)
+
+    out = []
+    for client, run, name in find_runs(exp, f"{reg}_{kind}_"):
+        uid = parse_uid(name, reg)
+        if want and uid != want:
+            continue
+        out.append((client, run, uid))
+    return out
+
 
 
 def load_model(cfg, client, run, ckpt_dir, device):
