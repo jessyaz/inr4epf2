@@ -354,6 +354,9 @@ class Model(BaseForecaster):
                                  f"{spec.get(k)} vs {getattr(m, k)}")
 
         m.models = d["models"]
+        m.use_lookback = spec.get("use_lookback", m.use_lookback)
+        m.use_dummies = spec.get("use_dummies", m.use_dummies)
+        m.calibration_windows = spec.get("calibration_windows",m.calibration_windows)
         m._recal = d.get("recal", {})
         m._recal_starts = d.get("recal_starts")
         m._t0_test = d.get("t0_test")
