@@ -98,10 +98,19 @@ def optimize_and_evaluate(registry_name, n_trials=20, seeds=[0, 1, 2, 3, 4]):
     print(f"  LANCEMENT OPTUNA : {registry_name.upper()} (~1M Params)")
     print(f"==================================================")
 
-    # Charger la configuration via l'API Hydra
+    # Résolution du fichier de config principal
+    config_name = None
+    if os.path.exists("conf/config.yaml"):
+        config_name = "config"
+    elif os.path.exists("conf/main.yaml"):
+        config_name = "main"
+
+    # Utiliser +registry pour forcer la création de la clé si elle n'existe pas
     with initialize(version_base=None, config_path="conf"):
-        base_cfg = compose(config_name="config" if os.path.exists("conf/config.yaml") else "main" if os.path.exists("conf/main.yaml") else None,
-                           overrides=[f"registry={registry_name}"])
+        try:
+            base_cfg = compose(config_name=config_name, overrides=[f"registry={registry_name}"])
+        except Exception:
+            base_cfg = compose(config_name=config_name, overrides=[f"+registry={registry_name}"])
 
     # Injecter l'architecture 1M et forcer r=0.0
     with open_dict(base_cfg):
@@ -168,7 +177,7 @@ def optimize_and_evaluate(registry_name, n_trials=20, seeds=[0, 1, 2, 3, 4]):
 
     print(f"[+] Configuration optimale enregistrée dans : {yaml_output_path}")
 
-    # Evaluation 5 seeds
+    # Évaluation 5 seeds
     print(f"\n--- Évaluation finale sur 5 Seeds (seeds={seeds}) ---")
     val_maes, test_maes = [], []
 
