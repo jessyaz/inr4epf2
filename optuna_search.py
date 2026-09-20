@@ -1,10 +1,12 @@
 import sys
+import os
 from pathlib import Path
 import optuna
 from omegaconf import OmegaConf, open_dict
 import numpy as np
 import torch
 import yaml
+from hydra import initialize, compose
 
 from naming import main_run, experiment_name
 from utils.mlflow_logger import MLflowLogger
@@ -12,7 +14,6 @@ from utils.tester import test
 from utils.trainer import train
 from runner import build_model, build_loaders
 
-# Silencer les logs verbeux d'Optuna (pour garder une console propre)
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 # Configurations verrouillées à ~1M de paramètres par architecture
@@ -50,7 +51,7 @@ ISO_1M_CONFIGS = {
 
 
 def run_single_experiment(cfg):
-    """ Exécute un entraînement complet basé sur la logique de ton runner (avec MLflow) """
+    """ Exécute un entraînement complet basé sur la logique du runner (avec MLflow) """
     import uuid
 
     ablated = not cfg.model.get("use_lookback", True)
@@ -73,7 +74,6 @@ def run_single_experiment(cfg):
 
     loaders = {"train_loader": train_loader, "val_loader": val_loader}
 
-    # Le bloc MLflowLogger garantit le suivi dans MLflow pour chaque run
     with MLflowLogger(cfg) as logger:
         if optimizer is None:
             model.fit(loaders, device, logger)
@@ -93,15 +93,17 @@ def run_single_experiment(cfg):
     return results["val_loss"]["MAE"], results["test_loss"]["MAE"]
 
 
-def optimize_and_evaluate(registry_name, config_path="conf/config.yaml", n_trials=20, seeds=[0, 1, 2, 3, 4]):
+def optimize_and_evaluate(registry_name, n_trials=20, seeds=[0, 1, 2, 3, 4]):
     print(f"\n==================================================")
     print(f"  LANCEMENT OPTUNA : {registry_name.upper()} (~1M Params)")
     print(f"==================================================")
 
-    # 1. Charger la config unique conf/config.yaml
-    base_cfg = OmegaConf.load(config_path)
+    # Charger la configuration via l'API Hydra
+    with initialize(version_base=None, config_path="conf"):
+        base_cfg = compose(config_name="config" if os.path.exists("conf/config.yaml") else "main" if os.path.exists("conf/main.yaml") else None,
+                           overrides=[f"registry={registry_name}"])
 
-    # 2. Injecter le registry et verrouiller l'architecture à ~1M
+    # Injecter l'architecture 1M et forcer r=0.0
     with open_dict(base_cfg):
         base_cfg.registry = registry_name
 
@@ -109,19 +111,16 @@ def optimize_and_evaluate(registry_name, config_path="conf/config.yaml", n_trial
             for k, v in ISO_1M_CONFIGS[registry_name]["model"].items():
                 base_cfg.model[k] = v
 
-        # Force r=0.0 pour chercher l'optimum sous observabilité totale
         base_cfg.masking.rate = 0.0
 
     def objective(trial):
         cfg = base_cfg.copy()
 
-        # Hyperparamètres à optimiser
         lr = trial.suggest_float("lr", 1e-5, 3e-4, log=True)
         wd = trial.suggest_float("weight_decay", 1e-4, 1e-1, log=True)
         dropout = trial.suggest_float("dropout", 0.05, 0.35, step=0.05)
         stride_train = trial.suggest_categorical("stride_train", [1, 2, 3, 6])
 
-        # Injection dynamique
         with open_dict(cfg):
             if "optim" not in cfg.model:
                 cfg.model.optim = {}
@@ -129,7 +128,7 @@ def optimize_and_evaluate(registry_name, config_path="conf/config.yaml", n_trial
             cfg.model.optim.weight_decay = wd
             cfg.model.dropout = dropout
             cfg.window.stride_train = stride_train
-            cfg.seed = 0  # Seed fixe pour la recherche Optuna
+            cfg.seed = 0
 
         try:
             val_mae, _ = run_single_experiment(cfg)
@@ -138,7 +137,7 @@ def optimize_and_evaluate(registry_name, config_path="conf/config.yaml", n_trial
             print(f"[Trial Failed - {registry_name}] : {e}")
             return float("inf")
 
-    # Recherche Optuna à r=0.0
+    # Recherche Optuna
     study = optuna.create_study(direction="minimize")
     study.optimize(objective, n_trials=n_trials)
 
@@ -146,9 +145,7 @@ def optimize_and_evaluate(registry_name, config_path="conf/config.yaml", n_trial
     print(f"\n[+] Meilleurs hyperparamètres pour {registry_name} à r=0.0 :")
     print(best_params)
 
-    # ------------------------------------------------------------------
-    # SAUVEGARDE DU MEILLEUR YAML DANS conf/
-    # ------------------------------------------------------------------
+    # Sauvegarde YAML
     best_config_dict = {
         "registry": registry_name,
         "model": {
@@ -164,15 +161,14 @@ def optimize_and_evaluate(registry_name, config_path="conf/config.yaml", n_trial
         }
     }
 
+    Path("conf").mkdir(exist_ok=True)
     yaml_output_path = Path("conf") / f"best_{registry_name}.yaml"
     with open(yaml_output_path, "w") as f:
         yaml.dump(best_config_dict, f, default_flow_style=False, sort_keys=False)
 
     print(f"[+] Configuration optimale enregistrée dans : {yaml_output_path}")
 
-    # ------------------------------------------------------------------
-    # ÉVALUATION FINALE SUR 5 SEEDS
-    # ------------------------------------------------------------------
+    # Evaluation 5 seeds
     print(f"\n--- Évaluation finale sur 5 Seeds (seeds={seeds}) ---")
     val_maes, test_maes = [], []
 
@@ -201,8 +197,7 @@ def optimize_and_evaluate(registry_name, config_path="conf/config.yaml", n_trial
 
 
 if __name__ == "__main__":
-    # Liste des 3 baselines à exécuter
     models_to_run = ["masked_transformer", "imputed_transformer", "dnn"]
 
     for model_name in models_to_run:
-        optimize_and_evaluate(model_name, config_path="conf/config.yaml", n_trials=20, seeds=[0, 1, 2, 3, 4])
+        optimize_and_evaluate(model_name, n_trials=20, seeds=[0, 1, 2, 3, 4])
