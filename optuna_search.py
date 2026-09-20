@@ -1,3 +1,98 @@
+import sys
+import os
+from pathlib import Path
+import optuna
+from omegaconf import OmegaConf, open_dict
+import numpy as np
+import torch
+import yaml
+from hydra import initialize, compose
+
+from naming import main_run, experiment_name
+from utils.mlflow_logger import MLflowLogger
+from utils.tester import test
+from utils.trainer import train
+from runner import build_model, build_loaders
+
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+# Configurations verrouillées à ~1M de paramètres par architecture
+ISO_1M_CONFIGS = {
+    "masked_transformer": {
+        "model": {
+            "embedding_dim": 256,
+            "num_heads": 8,
+            "dim_feedforward": 512,
+            "num_layers": 6,
+            "normalize_first": True,
+            "activation": "gelu",
+            "use_lookback": True,
+        }
+    },
+    "imputed_transformer": {
+        "model": {
+            "embedding_dim": 256,
+            "num_heads": 8,
+            "dim_feedforward": 512,
+            "num_layers": 6,
+            "normalize_first": True,
+            "activation": "gelu",
+            "use_lookback": True,
+        }
+    },
+    "dnn": {
+        "model": {
+            "hidden_dim": 512,
+            "num_layers": 5,
+            "use_lookback": True,
+        }
+    }
+}
+
+
+def run_single_experiment(cfg):
+    """ Exécute un entraînement complet basé sur la logique du runner (avec MLflow) """
+    import uuid
+
+    ablated = not cfg.model.get("use_lookback", True)
+
+    with open_dict(cfg):
+        cfg.model_uid = uuid.uuid4().hex[:8]
+        cfg.mlflow.experiment_name = experiment_name(cfg)
+        cfg.mlflow.run_name = main_run(cfg.registry, cfg.model_uid)
+        cfg.run_dir = (Path("runs") / cfg.model_uid).as_posix()
+
+    run_dir = Path(cfg.run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    torch.manual_seed(cfg.seed)
+    device = ("cuda" if torch.cuda.is_available() else "cpu") if cfg.device == "auto" else cfg.device
+
+    train_loader, val_loader, test_loader, scaler = build_loaders(cfg)
+    model = build_model(cfg).to(device)
+    optimizer = model.configure_optimizer()
+
+    loaders = {"train_loader": train_loader, "val_loader": val_loader}
+
+    with MLflowLogger(cfg) as logger:
+        if optimizer is None:
+            model.fit(loaders, device, logger)
+        else:
+            train(model, loaders, optimizer, device, logger)
+
+        if hasattr(model, "prepare_test"):
+            model.prepare_test(test_loader, logger)
+
+        ckpt = run_dir / "model.pth"
+        model.save(ckpt)
+        logger.log_checkpoint(str(ckpt))
+
+        results = test(model, test_loader, scaler, device, logger)
+        logger.tester_flag = True
+
+    return results["val_loss"]["MAE"], results["test_loss"]["MAE"]
+
+
 def optimize_and_evaluate(registry_name, n_trials=20, seeds=[0, 1, 2, 3, 4]):
     print(f"\n==================================================")
     print(f"  LANCEMENT OPTUNA : {registry_name.upper()} (~1M Params)")
@@ -105,3 +200,10 @@ def optimize_and_evaluate(registry_name, n_trials=20, seeds=[0, 1, 2, 3, 4]):
     print(f"\n[RÉSULTAT FINAL {registry_name.upper()}]")
     print(f"MAE Moyenne Validation : {np.mean(val_maes):.4f} +/- {np.std(val_maes):.4f}")
     print(f"MAE Moyenne Test       : {np.mean(test_maes):.4f} +/- {np.std(test_maes):.4f}")
+
+
+if __name__ == "__main__":
+    models_to_run = ["masked_transformer", "imputed_transformer", "dnn"]
+
+    for model_name in models_to_run:
+        optimize_and_evaluate(model_name, n_trials=20, seeds=[0, 1, 2, 3, 4])
