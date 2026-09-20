@@ -64,7 +64,8 @@ def run_single_experiment(cfg):
 
     with open_dict(cfg):
         cfg.model_uid = uuid.uuid4().hex[:8]
-        cfg.mlflow.experiment_name = experiment_name(cfg)
+       # cfg.mlflow.experiment_name = experiment_name(cfg)
+        cfg.mlflow.experiment_name = f"optuna_{cfg.registry}"
         cfg.mlflow.run_name = main_run(cfg.registry, cfg.model_uid)
         cfg.run_dir = (Path("runs") / cfg.model_uid).as_posix()
 
