@@ -63,7 +63,7 @@ model:
     lr: 3e-4
     lr_inr: 3e-4
     lr_pe: 1e-4
-    weight_decay: 0.0
+    weight_decay: 1e-2
 
 pod:
   model_uid: null

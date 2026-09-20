@@ -33,13 +33,14 @@ class BaseForecaster(nn.Module, ABC):
     # -- optionnel ----------------------------------------------------------
 
     def loss(self, batch, device):
-        """Perte d'entrainement. Par defaut, MSE sur l'horizon.
-
-        Un modele dont la supervision differe (cible dense, terme auxiliaire)
-        surcharge cette methode plutot que de contraindre le trainer.
-        """
         pred = self.forward_step(batch, device)
-        return ((pred - batch["Y"].to(device)) ** 2).mean()
+        target = batch["Y"].to(device)
+        kind = getattr(self.cfg.train, "loss", "mse")
+        if kind == "l1":
+            return (pred - target).abs().mean()
+        if kind == "huber":
+            return torch.nn.functional.huber_loss(pred, target, delta=1.0)
+        return ((pred - target) ** 2).mean()
 
     def set_epoch(self, epoch):
         """Appele en debut de chaque epoch. A surcharger si besoin."""
