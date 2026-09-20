@@ -37,10 +37,10 @@ model:
   masked_attention: true
   imputation: linear          # utilisee par la variante imputee seulement
 
-  embedding_dim: 64
-  num_heads: 4
-  dim_feedforward: 128
-  num_layers: 3
+  embedding_dim: 256
+  num_heads: 8
+  dim_feedforward: 512
+  num_layers: 6
   normalize_first: true
   dropout: 0.1
   activation: gelu
@@ -49,7 +49,7 @@ model:
   use_lookback: true
 
   optim:
-    lr: 3e-4
+    lr: 1e-4
     weight_decay: 1e-4
 
 pod:
