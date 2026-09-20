@@ -6,7 +6,6 @@ from omegaconf import OmegaConf, open_dict
 import numpy as np
 import torch
 import yaml
-from hydra import initialize, compose
 
 from naming import main_run, experiment_name
 from utils.mlflow_logger import MLflowLogger
@@ -15,6 +14,13 @@ from utils.trainer import train
 from runner import build_model, build_loaders
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+# Mappage entre le nom du modèle et le fichier YAML dans conf/
+MODEL_FILE_MAP = {
+    "masked_transformer": "transformer_masked.yaml",
+    "imputed_transformer": "transformer_imputed.yaml",
+    "dnn": "dnn.yaml",
+}
 
 # Configurations verrouillées à ~1M de paramètres par architecture
 ISO_1M_CONFIGS = {
@@ -98,25 +104,24 @@ def optimize_and_evaluate(registry_name, n_trials=20, seeds=[0, 1, 2, 3, 4]):
     print(f"  LANCEMENT OPTUNA : {registry_name.upper()} (~1M Params)")
     print(f"==================================================")
 
-    config_name = None
-    if os.path.exists("conf/config.yaml"):
-        config_name = "config"
-    elif os.path.exists("conf/main.yaml"):
-        config_name = "main"
+    # Chargement direct du fichier YAML correspondant depuis conf/
+    yaml_filename = MODEL_FILE_MAP.get(registry_name, f"{registry_name}.yaml")
+    config_path = Path("conf") / yaml_filename
 
-    with initialize(version_base=None, config_path="conf"):
-        try:
-            base_cfg = compose(config_name=config_name, overrides=[f"registry={registry_name}"])
-        except Exception:
-            base_cfg = compose(config_name=config_name, overrides=[f"+registry={registry_name}"])
+    if not config_path.exists():
+        raise FileNotFoundError(f"Fichier de configuration introuvable : {config_path}")
 
-    # Fusion propre du dictionnaire modèle dans la config globale
+    base_cfg = OmegaConf.load(config_path)
+
+    # Fusion avec la configuration ISO ~1M
     if registry_name in ISO_1M_CONFIGS:
         override_cfg = OmegaConf.create(ISO_1M_CONFIGS[registry_name])
         base_cfg = OmegaConf.merge(base_cfg, override_cfg)
 
     with open_dict(base_cfg):
         base_cfg.registry = registry_name
+        if "masking" not in base_cfg:
+            base_cfg.masking = {}
         base_cfg.masking.rate = 0.0
 
     def objective(trial):
@@ -133,6 +138,8 @@ def optimize_and_evaluate(registry_name, n_trials=20, seeds=[0, 1, 2, 3, 4]):
             cfg.model.optim.lr = lr
             cfg.model.optim.weight_decay = wd
             cfg.model.dropout = dropout
+            if "window" not in cfg:
+                cfg.window = {}
             cfg.window.stride_train = stride_train
             cfg.seed = 0
 
@@ -151,7 +158,7 @@ def optimize_and_evaluate(registry_name, n_trials=20, seeds=[0, 1, 2, 3, 4]):
     print(f"\n[+] Meilleurs hyperparamètres pour {registry_name} à r=0.0 :")
     print(best_params)
 
-    # Sauvegarde YAML
+    # Sauvegarde YAML de la meilleure config
     best_config_dict = {
         "registry": registry_name,
         "model": {
@@ -167,7 +174,6 @@ def optimize_and_evaluate(registry_name, n_trials=20, seeds=[0, 1, 2, 3, 4]):
         }
     }
 
-    Path("conf").mkdir(exist_ok=True)
     yaml_output_path = Path("conf") / f"best_{registry_name}.yaml"
     with open(yaml_output_path, "w") as f:
         yaml.dump(best_config_dict, f, default_flow_style=False, sort_keys=False)
