@@ -30,6 +30,7 @@ train:
   save_checkpoint: true
   warmup_steps: 500
   grad_clip: 1.0
+  loss: mse
 
 model:
   # seule ligne qui distingue les deux variantes

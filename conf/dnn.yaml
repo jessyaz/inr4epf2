@@ -27,6 +27,7 @@ train:
   patience: 30
   plot_every: 0
   save_checkpoint: true
+  loss: mse
 
 model:
   price_lags: [1, 2, 3, 7]
