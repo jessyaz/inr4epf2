@@ -76,7 +76,8 @@ def locate(cfg, kind=MAIN):
     reg = cfg.registry
     want = cfg.pod.get("model_uid", None)
 
-    exp = cfg.mlflow.experiment_name or experiment_name(cfg)
+    # Alignement direct avec naming.py et runner.py
+    exp = experiment_name(cfg)
 
     out = []
     for client, run, name in find_runs(exp, f"{reg}_{kind}_"):
