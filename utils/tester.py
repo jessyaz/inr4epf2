@@ -1,90 +1,210 @@
-import matplotlib.pyplot as plt
+import os
+import sys
+from pathlib import Path
 import numpy as np
+import optuna
 import torch
-from tqdm import tqdm
+import yaml
+from omegaconf import OmegaConf, open_dict
 
-from datasets.loader import inverse_price
+from naming import experiment_name, main_run
+from runner import build_loaders, build_model
+from utils.mlflow_logger import MLflowLogger
+from utils.trainer import train
+
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+MODEL_FILE_MAP = {
+    "masked_transformer": "transformer_masked.yaml",
+    "imputed_transformer": "transformer_imputed.yaml",
+    "dnn": "dnn.yaml",
+}
+
+ISO_1M_CONFIGS = {
+    "masked_transformer": {
+        "model": {
+            "embedding_dim": 256,
+            "num_heads": 8,
+            "dim_feedforward": 512,
+            "num_layers": 6,
+            "normalize_first": True,
+            "activation": "gelu",
+            "use_lookback": True,
+        }
+    },
+    "imputed_transformer": {
+        "model": {
+            "embedding_dim": 256,
+            "num_heads": 8,
+            "dim_feedforward": 512,
+            "num_layers": 6,
+            "normalize_first": True,
+            "activation": "gelu",
+            "use_lookback": True,
+        }
+    },
+    "dnn": {
+        "model": {
+            "hidden_dim": 512,
+            "num_layers": 5,
+            "use_lookback": True,
+        }
+    },
+}
 
 
-def naive_seasonal(y_true):
-    """Naive du protocole Lago : meme heure, meme jour de semaine, S-1.
-    y_true : (N_jours, horizon), un jour par ligne (stride_eval = 24)."""
-    return np.concatenate([y_true[:7], y_true[:-7]], axis=0)
+def run_single_experiment(cfg):
+    """Exécute l'entraînement complet via train() et logge dans MLflow."""
+    import uuid
+
+    with open_dict(cfg):
+        cfg.model_uid = uuid.uuid4().hex[:8]
+        if "mlflow" not in cfg or cfg.mlflow is None:
+            cfg.mlflow = {}
+
+        cfg.mlflow.experiment_name = f"optuna_{cfg.registry}"
+
+        try:
+            cfg.mlflow.run_name = main_run(cfg.registry, cfg.model_uid)
+        except Exception:
+            cfg.mlflow.run_name = f"run_{cfg.registry}_{cfg.model_uid}"
+
+        cfg.run_dir = (Path("runs") / cfg.model_uid).as_posix()
+
+    run_dir = Path(cfg.run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    torch.manual_seed(cfg.seed)
+    device = (
+        ("cuda" if torch.cuda.is_available() else "cpu")
+        if cfg.device == "auto"
+        else cfg.device
+    )
+
+    train_loader, val_loader, _, _ = build_loaders(cfg)
+    model = build_model(cfg).to(device)
+    optimizer = model.configure_optimizer()
+
+    loaders = {"train_loader": train_loader, "val_loader": val_loader}
+
+    with MLflowLogger(cfg) as logger:
+        if optimizer is None:
+            results = model.fit(loaders, device, logger)
+        else:
+            results = train(model, loaders, optimizer, device, logger)
+
+        ckpt = run_dir / "model.pth"
+        model.save(ckpt)
+        logger.log_checkpoint(str(ckpt))
+
+    return results["val_loss"]["MSE"]
 
 
-def compute_metrics(y_hat, y_true, spike_q=0.90):
-    err = np.abs(y_hat - y_true)
-    mae = err.mean()
-    naive = naive_seasonal(y_true)
-    mae_naive = np.abs(naive - y_true).mean()
+def optimize_and_evaluate(registry_name, n_trials=20, seeds=[0, 1, 2, 3, 4]):
+    print(f"\n==================================================")
+    print(f"  LANCEMENT OPTUNA : {registry_name.upper()} (~1M Params)")
+    print(f"==================================================")
 
-    # print("MAE naive :", mae_naive)
-    # print("shape     :", y_true.shape)
-    # naive_24 = np.concatenate([y_true[:1], y_true[:-1]], axis=0)
-    # print("MAE naive J-1 :", np.abs(naive_24 - y_true).mean())
-    # print("MAE naive J-7 :", mae_naive)
+    yaml_filename = MODEL_FILE_MAP.get(registry_name, f"{registry_name}.yaml")
+    config_path = Path("conf") / yaml_filename
 
-    thr = np.quantile(y_true, spike_q)
-    spike = y_true >= thr
+    if not config_path.exists():
+        raise FileNotFoundError(f"Fichier introuvable : {config_path}")
 
-    denom = np.abs(y_hat) + np.abs(y_true)
-    return {
-        "MSE": float(((y_hat - y_true) ** 2).mean()),
-        "RMSE": float(np.sqrt(((y_hat - y_true) ** 2).mean())),
-        "MAE": float(mae),
-        "rMAE": float(mae / mae_naive),
-        "sMAPE": float(200 * np.mean(err / np.clip(denom, 1e-8, None))),
-        "MAE_spike": float(err[spike].mean()),
-        "spike_threshold": float(thr),
+    base_cfg = OmegaConf.load(config_path)
+
+    if registry_name in ISO_1M_CONFIGS:
+        override_cfg = OmegaConf.create(ISO_1M_CONFIGS[registry_name])
+        base_cfg = OmegaConf.merge(base_cfg, override_cfg)
+
+    with open_dict(base_cfg):
+        base_cfg.registry = registry_name
+        if "masking" not in base_cfg:
+            base_cfg.masking = {}
+        base_cfg.masking.rate = 0.0
+
+    def objective(trial):
+        cfg = base_cfg.copy()
+
+        lr = trial.suggest_float("lr", 1e-5, 3e-4, log=True)
+        wd = trial.suggest_float("weight_decay", 1e-4, 1e-1, log=True)
+        dropout = trial.suggest_float("dropout", 0.05, 0.35, step=0.05)
+        stride_train = trial.suggest_categorical("stride_train", [1, 2, 3, 6])
+
+        with open_dict(cfg):
+            if "optim" not in cfg.model:
+                cfg.model.optim = {}
+            cfg.model.optim.lr = lr
+            cfg.model.optim.weight_decay = wd
+            cfg.model.dropout = dropout
+            if "window" not in cfg:
+                cfg.window = {}
+            cfg.window.stride_train = stride_train
+            cfg.seed = 0
+
+        try:
+            return run_single_experiment(cfg)
+        except Exception as e:
+            print(f"[Trial Failed - {registry_name}] : {e}")
+            return float("inf")
+
+    study = optuna.create_study(direction="minimize")
+    study.optimize(objective, n_trials=n_trials)
+
+    best_params = study.best_params
+    print(f"\n[+] Meilleurs hyperparamètres pour {registry_name} à r=0.0 :")
+    print(best_params)
+
+    best_config_dict = {
+        "registry": registry_name,
+        "model": {
+            **ISO_1M_CONFIGS[registry_name]["model"],
+            "dropout": best_params["dropout"],
+            "optim": {
+                "lr": best_params["lr"],
+                "weight_decay": best_params["weight_decay"],
+            },
+        },
+        "window": {"stride_train": best_params["stride_train"]},
     }
 
+    yaml_output_path = Path("conf") / f"best_{registry_name}.yaml"
+    with open(yaml_output_path, "w") as f:
+        yaml.dump(best_config_dict, f, default_flow_style=False, sort_keys=False)
 
-@torch.no_grad()
-def test(model, loader, scaler, device, logger=None, verbose=True):
-    model.eval()
+    print(f"[+] Configuration enregistrée dans : {yaml_output_path}")
 
-    preds, trues, masks = [], [], []
-    for batch in tqdm(loader, desc="Testing", leave=False):
-        pred = model.forward_step(batch, device)
-        preds.append(pred.detach().cpu().numpy())
-        trues.append(batch["Y"].numpy())
-        masks.append(batch["mask"].numpy())
+    print(f"\n--- Évaluation finale sur 5 Seeds (seeds={seeds}) ---")
+    val_mses = []
 
-    preds = np.concatenate(preds, axis=0)        # (N, H)
-    trues = np.concatenate(trues, axis=0)
-    masks = np.concatenate(masks, axis=0).astype(bool)
+    final_cfg = base_cfg.copy()
+    with open_dict(final_cfg):
+        if "optim" not in final_cfg.model:
+            final_cfg.model.optim = {}
+        final_cfg.model.optim.lr = best_params["lr"]
+        final_cfg.model.optim.weight_decay = best_params["weight_decay"]
+        final_cfg.model.dropout = best_params["dropout"]
+        final_cfg.window.stride_train = best_params["stride_train"]
 
-    # metriques en EUR/MWh
-    if scaler is not None:
-        preds = inverse_price(scaler, preds)
-        trues = inverse_price(scaler, trues)
+    for seed in seeds:
+        cfg_seed = final_cfg.copy()
+        with open_dict(cfg_seed):
+            cfg_seed.seed = seed
 
-    loss_dict = compute_metrics(preds, trues)
-    eff = float((~masks).mean())
-    loss_dict["masking_rate_effective"] = eff
+        val_mse = run_single_experiment(cfg_seed)
+        val_mses.append(val_mse)
+        print(f"  Seed {seed} | Val MSE: {val_mse:.6f}")
 
-    # pires et meilleures fenetres
-    err = ((preds - trues) ** 2).mean(axis=1)
-    ids = np.argsort(err)
-    worst, best = ids[-3:], ids[:3]
+    print(f"\n[RÉSULTAT FINAL {registry_name.upper()}]")
+    print(
+        f"MSE Moyenne Validation : {np.mean(val_mses):.6f} +/- {np.std(val_mses):.6f}"
+    )
 
-    if logger is not None:
-        fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-        H = preds.shape[1]
-        for ax, i in zip(axes.flatten(), list(worst) + list(best)):
-            ax.plot(range(H), trues[i], marker="o", markersize=3, label="Target")
-            ax.plot(range(H), preds[i], label="Pred")
-            n_obs = int(masks[i].sum())
-            ax.set_title(f"win {i} | {n_obs}/{masks.shape[1]} obs | "
-                         f"mse {err[i]:.1f}", fontsize=8)
-            ax.legend(fontsize=7)
-        plt.tight_layout()
-        logger.log_plot(fig, artifact_path="plot_test/test.png")
-        plt.close(fig)
-        logger.log_metrics(loss_dict, epoch=0, prefix="test")
 
-    if verbose:
-        for k, v in loss_dict.items():
-            print(f"  {k:24s} {v:.4f}")
+if __name__ == "__main__":
+    models_to_run = ["masked_transformer", "imputed_transformer", "dnn"]
 
-    return {"test_loss": loss_dict}
+    for model_name in models_to_run:
+        optimize_and_evaluate(
+            model_name, n_trials=20, seeds=[0, 1, 2, 3, 4]
+        )
