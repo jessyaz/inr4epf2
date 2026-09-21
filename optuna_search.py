@@ -55,18 +55,21 @@ ISO_1M_CONFIGS = {
     }
 }
 
+from utils.tester import validate # ou le module où se trouve ta fonction validate
 
 def run_single_experiment(cfg):
     """ Exécute un entraînement complet basé sur la logique du runner (avec MLflow) """
     import uuid
 
-    ablated = not cfg.model.get("use_lookback", True)
-
     with open_dict(cfg):
         cfg.model_uid = uuid.uuid4().hex[:8]
-       # cfg.mlflow.experiment_name = experiment_name(cfg)
+        if "mlflow" not in cfg or cfg.mlflow is None:
+            cfg.mlflow = {}
         cfg.mlflow.experiment_name = f"optuna_{cfg.registry}"
-        cfg.mlflow.run_name = main_run(cfg.registry, cfg.model_uid)
+        try:
+            cfg.mlflow.run_name = main_run(cfg.registry, cfg.model_uid)
+        except Exception:
+            cfg.mlflow.run_name = f"run_{cfg.registry}_{cfg.model_uid}"
         cfg.run_dir = (Path("runs") / cfg.model_uid).as_posix()
 
     run_dir = Path(cfg.run_dir)
@@ -87,17 +90,14 @@ def run_single_experiment(cfg):
         else:
             train(model, loaders, optimizer, device, logger)
 
-        if hasattr(model, "prepare_test"):
-            model.prepare_test(test_loader, logger)
-
         ckpt = run_dir / "model.pth"
         model.save(ckpt)
         logger.log_checkpoint(str(ckpt))
 
-        results = test(model, test_loader, scaler, device, logger)
-        logger.tester_flag = True
+        # Évaluation strictement limitée au jeu de validation
+        val_res = validate(model, val_loader, device)
 
-    return results["val_loss"]["MAE"], results["test_loss"]["MAE"]
+    return val_res["val_loss"]["MSE"]
 
 
 def optimize_and_evaluate(registry_name, n_trials=20, seeds=[0, 1, 2, 3, 4]):
@@ -210,7 +210,7 @@ def optimize_and_evaluate(registry_name, n_trials=20, seeds=[0, 1, 2, 3, 4]):
 
 
 if __name__ == "__main__":
-    models_to_run = ["masked_transformer", "imputed_transformer", "dnn"]
+    models_to_run = ["masked_transformer", "imputed_transformerunr", "dnn"]
 
     for model_name in models_to_run:
         optimize_and_evaluate(model_name, n_trials=20, seeds=[0, 1, 2, 3, 4])
