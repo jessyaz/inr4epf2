@@ -30,6 +30,12 @@ MODEL_REGISTRY = {
     "imputed_transformer": transformer,
 }
 
+def count_parameters(model):
+    if not isinstance(model, torch.nn.Module):
+        return 0, 0
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    return trainable, total
 
 def build_model(cfg):
     if cfg.registry not in MODEL_REGISTRY:
@@ -84,6 +90,9 @@ def main(cfg: DictConfig):
     train_loader, val_loader, test_loader, scaler = build_loaders(cfg)
     model = build_model(cfg).to(device)
     optimizer = model.configure_optimizer()
+
+    trainable_params, total_params = count_parameters(model)
+    print(f"--------[{cfg.registry.upper()}] Parameters: {trainable_params:,} trainable | {total_params:,} total --------")
 
     loaders = {"train_loader": train_loader, "val_loader": val_loader}
 

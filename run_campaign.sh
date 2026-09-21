@@ -39,8 +39,12 @@ set -u
 
 MARKETS="NP PJM BE FR DE"
 SEEDS="0 1 2 3 4"
-GRAD="dnn transformer_imputed transformer_masked inr"   # noms de config
-ALL_POD="lear dnn transformer_imputed transformer_masked inr"
+#GRAD="dnn transformer_imputed transformer_masked inr"   # noms de config
+GRAD="dnn epf_transformer transformer_imputed_1m transformer_masked_1m inr"
+#ALL_POD="lear dnn transformer_imputed transformer_masked inr"
+
+ALL_POD="lear dnn epf_transformer transformer_imputed_1m transformer_masked_1m inr"
+
 NPAR=2                       # runs GPU simultanes
 LOGDIR="logs/$(date +%m%d_%H%M)"
 
@@ -114,19 +118,16 @@ run_ablation () {
 
 case "$STAGE" in
   train)
-    run_lear &
-    LEAR_PID=$!
-    run_grad
-    wait $LEAR_PID ;;
+    # LEAR est déjà exécuté, on lance uniquement les modèles GPU
+    run_grad ;;
   pod)
     run_pod ;;
   ablation)
     run_ablation ;;
   all)
-    run_lear &
-    LEAR_PID=$!
+    # On saute run_lear et on enchaîne directement sur le reste
+    echo "=== LEAR ignoré (résultats existants conservés) ==="
     run_grad
-    wait $LEAR_PID
     run_pod
     run_ablation ;;
   *)
@@ -134,10 +135,9 @@ case "$STAGE" in
 esac
 
 echo
-echo "=== recapitulatif ==="
-echo "fichiers de resultats : $(ls results/pod/*/raw_*.csv 2>/dev/null | wc -l)"
-echo "echecs                : $(grep -h 'Error executing job' "$LOGDIR"/*.log 2>/dev/null | wc -l)"
-
+echo "=== Récapitulatif ==="
+echo "Fichiers de résultats : $(ls results/pod/*/raw_*.csv 2>/dev/null | wc -l)"
+echo "Échecs                : $(grep -h 'Error executing job' "$LOGDIR"/*.log 2>/dev/null | wc -l)"
 cat <<'EOF'
 
 Suite :

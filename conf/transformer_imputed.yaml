@@ -30,17 +30,17 @@ train:
   save_checkpoint: true
   warmup_steps: 500
   grad_clip: 1.0
-  loss: mse
+  loss: l1                   # CORRIGÉ : aligné sur L1 (comme INR et DNN)
 
 model:
-  # seule ligne qui distingue les deux variantes
   masked_attention: false
-  imputation: linear          # utilisee par la variante imputee seulement
+  imputation: linear
 
-  embedding_dim: 64
-  num_heads: 4
-  dim_feedforward: 128
-  num_layers: 3
+  # Redimensionné pour atteindre ~1M de paramètres (contrôle de capacité)
+  embedding_dim: 192
+  num_heads: 6
+  dim_feedforward: 512
+  num_layers: 4
   normalize_first: true
   dropout: 0.1
   activation: gelu
@@ -49,7 +49,7 @@ model:
   use_lookback: true
 
   optim:
-    lr: 3e-4
+    lr: 1e-4                 # Ajusté à 1e-4 pour stabiliser le modèle 1M
     weight_decay: 1e-4
 
 pod:

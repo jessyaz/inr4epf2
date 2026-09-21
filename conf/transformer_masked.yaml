@@ -30,17 +30,17 @@ train:
   save_checkpoint: true
   warmup_steps: 500
   grad_clip: 1.0
-  loss: mse
+  loss: l1                   # CORRIGÉ : aligné sur L1
 
 model:
-  # seule ligne qui distingue les deux variantes
   masked_attention: true
-  imputation: linear          # utilisee par la variante imputee seulement
+  imputation: none           # CORRIGÉ : pas d'imputation, masquage natif dans l'attention
 
-  embedding_dim: 256
-  num_heads: 8
-  dim_feedforward: 512
-  num_layers: 6
+  # Alignement exact sur ~1,01 M de paramètres (comme l'INR)
+  embedding_dim: 192         # CORRIGÉ
+  num_heads: 6               # CORRIGÉ
+  dim_feedforward: 512       # CORRIGÉ
+  num_layers: 3              # CORRIGÉ
   normalize_first: true
   dropout: 0.1
   activation: gelu
