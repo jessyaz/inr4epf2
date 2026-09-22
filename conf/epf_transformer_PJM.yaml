@@ -1,0 +1,76 @@
+# EPF-Transformer, configuration publiee pour le marche PJM
+# (Llorente & Portela, arXiv:2403.16108, Tables VI-X : configuration
+#  retenue sur leur validation).
+#
+# Deux ecarts assumes avec leur protocole :
+#   - la longueur de sequence publiee vaut 336 h ; nous conservons 168 h,
+#     commune a tous les bras. Changer le lookback d'un seul modele
+#     briserait la comparabilite bien plus que ses hyperparametres.
+#   - leur ordonnanceur est un StepLR ; le notre reduit le pas sur plateau,
+#     comme pour les autres modeles a gradient.
+
+registry: epf_transformer
+model_uid: null
+run_dir: null
+exp_suffix: null
+
+seed: 0
+device: auto
+
+dataset:
+  name: PJM
+  processed_dir: ./datasets/processed
+  batch_size: 64
+  num_workers: 4
+
+window:
+  lookback: 168      # 7 jetons de 24 h
+  horizon: 24
+  stride_train: 24   # un jeton = une journee : fenetres alignees
+  stride_eval: 24
+
+masking:
+  rate: 0.0
+  mechanism: mcar
+  block_mean: 12
+
+train:
+  num_epochs: 300
+  patience: 30
+  plot_every: 0
+  save_checkpoint: true
+  warmup_steps: 500
+  grad_clip: 0.1
+  loss: mse
+
+model:
+  embedding_dim: 128       # leur n
+  num_heads: 4           # leur NH
+  num_layers: 4          # leur NL
+  dim_feedforward: 1048     # leur FD
+  dropout: 0.2            # leur P
+  normalize_first: false
+  activation: relu
+
+  exog_dim: 2
+  imputation: linear
+  use_lookback: true
+
+  optim:
+    lr: 1e-4
+    weight_decay: 0.0
+
+pod:
+  model_uid: null
+  rates: [0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 0.95, 1.0]
+  mechanisms: [mcar, block]
+  mask_seeds: [0, 1, 2, 3, 4]
+  recalib_on_masked: false
+  run_ablation: true
+  out_dir: ./results/pod
+
+mlflow:
+  enabled: true
+  force_offline: false
+  experiment_name: null
+  run_name: null
