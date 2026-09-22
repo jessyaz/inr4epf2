@@ -30,7 +30,7 @@ train:
   save_checkpoint: true
   warmup_steps: 500
   grad_clip: 1.0
-  loss: l1                   # CORRIGÉ : aligné sur L1
+  loss: mse                   # CORRIGÉ : aligné sur L1
 
 model:
   masked_attention: true

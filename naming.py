@@ -3,22 +3,35 @@
 Toute composition de nom passe par ici : aucune chaine n'est fabriquee
 ailleurs dans le projet.
 
-    experiment      icassp_V1_{dataset}_{registry}[_{suffix}]
+    experiment      icassp_{version}_{dataset}_{registry}[_{suffix}]
     run principal   {registry}_main_{uid}          -- produit par runner.py
     ablation        {registry}_ablated_{uid}       -- modele sans lookback
     sous-run POD    {registry}_{uid}_{rate}        -- un par point de grille
 
-Le suffixe optionnel (cfg.exp_suffix) isole une campagne d'ablation dans sa
-propre experience, pour que le balayage POD ne melange pas des variantes
-d'architecture avec les runs principaux.
+VERSION identifie la campagne en cours : la changer isole entierement les
+nouveaux runs des precedents, sans rien effacer.
+
+FROZEN fige la version d'un modele dont l'estimation ne depend pas de la
+campagne. LEAR est deterministe et n'a pas d'hyperparametre libre -- son
+lambda vient d'un critere d'information --, donc le reestimer a chaque
+campagne ne produirait que du calcul perdu : ses checkpoints restent lus la
+ou ils ont ete produits.
+
+Le suffixe optionnel (cfg.exp_suffix) isole une variante dans sa propre
+experience, pour que le balayage POD ne melange pas des architectures
+differentes sous un meme nom.
 """
+
+VERSION = "V4"
+FROZEN = {"lear": "V3"}
 
 MAIN = "main"
 ABLATED = "ablated"
 
 
 def experiment_name(cfg):
-    base = f"icassp_V3_{cfg.dataset.name}_{cfg.registry}"
+    version = FROZEN.get(cfg.registry, VERSION)
+    base = f"icassp_{version}_{cfg.dataset.name}_{cfg.registry}"
     suffix = cfg.get("exp_suffix", None)
     return f"{base}_{suffix}" if suffix else base
 

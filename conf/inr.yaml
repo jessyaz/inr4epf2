@@ -30,7 +30,7 @@ train:
   grad_clip: 0.0
   plot_every: 0
   save_checkpoint: true
-  loss: l1
+  loss: mse
 
 model:
   static_exog: false

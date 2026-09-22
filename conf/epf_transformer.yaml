@@ -42,7 +42,7 @@ model:
   activation: relu
 
   exog_dim: 2
-  imputation: seasonal
+  imputation: linear
   use_lookback: true
 
   optim:
